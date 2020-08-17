@@ -14,7 +14,9 @@
 
 
 
+<br />
 
+<br />
 
 # **正片**
 
@@ -63,7 +65,9 @@
 
 
 
+<br />
 
+<br />
 
 ## **2. 编译与坑**
 
@@ -109,6 +113,8 @@ $ ./dev/make-distribution.sh \
 
 
 
+<br />
+
 ### **2.2 磕磕碰碰爬坑**
 
 #### **2.2.1 `protocol version`和`parent.relativePath指向`问题**
@@ -122,6 +128,8 @@ $ ./dev/make-distribution.sh \
 &ensp;&ensp;&ensp;&ensp;Java7环境中，若要解决该问题，在环境变量MAVEN_OPTS中加入`-Dhttps.protocols=TLSv1.2`来override编译时Java采用的链接协议。（还可以将TLSv1，TLSv1.1以逗号分隔传入）
 
 
+
+<br />
 
 #### **2.2.2 `Cannot resolve dependencies`和`handshake_failure系列`**
 
@@ -166,6 +174,8 @@ $ ./dev/make-distribution.sh \
 
 
 
+<br />
+
 #### **2.2.3 maven编译失败缓存问题**
 
 &ensp;&ensp;&ensp;&ensp;maven编译过程中的包下载failure会形成`*.lastUpdated`文件缓存到本地仓库，直到过了中心仓库的更新区间才会再次尝试抓取，除非被强制更新。当时因为网络问题时常断网，会导致fetch失败，所以：
@@ -175,6 +185,8 @@ $ ./dev/make-distribution.sh \
 > by somebody@StackOverflow
 
 
+
+<br />
 
 #### **2.2.4 解压文件时候`gzip：stdin：unexpected end of file tar：归档文件中异常的 EOF`问题**
 
@@ -189,6 +201,8 @@ $ ./dev/make-distribution.sh \
 > 这两个bug**不会中断编译**的进行，但会给后面的编译中带来ComplieFailed
 
 
+
+<br />
 
 #### **2.2.5 `进程被杀死，${MVN_BIN}" -DzincPort=${ZINC_PORT} "$@`**
 
@@ -225,6 +239,8 @@ $ ./dev/make-distribution.sh \
 
 
 
+<br />
+
 #### **2.2.6 spark project core阶段的`testCompile：net.alchim31.maven：CompilerFailure`**
 
 &ensp;&ensp;&ensp;&ensp;问题产生机理未明，估计是使用Java7导致的和Spark的版本冲突问题，可以尝试：
@@ -235,7 +251,9 @@ $ ./dev/make-distribution.sh \
 
 
 
+<br />
 
+<br />
 
 ## **3. 手动释放内存**
 
@@ -261,7 +279,9 @@ $ sudo echo 3 | sudo tee /proc/sys/vm/drop_caches
 
 
 
+<br />
 
+<br />
 
 ## **4. 小结**
 
@@ -275,6 +295,8 @@ $ sudo echo 3 | sudo tee /proc/sys/vm/drop_caches
 - 网络：最好有能“畅通无阻”的网络以官网为参考大纲，以报错信息为debug主要依据，以思考和搜索引擎为debug主要辅助
 
 
+
+<br />
 
 ### **4.2 基本Debug策略**
 
