@@ -1,8 +1,12 @@
-## **目录**
+# **目录**
 
 [TOC]
 
-## **前言**
+
+
+
+
+# **前言**
 
 &ensp;&ensp;&ensp;&ensp;Spark源码编译断断续续地搞了三天，期间因为虚拟机存储空间、网络等各种问题卡了很久，但幸好最后没有放弃，终于踩到不少坑并成功了。所以写下此文做些记录。
 
@@ -10,9 +14,11 @@
 
 
 
-## **正片**
 
-### 1. 阅读官网
+
+# **正片**
+
+## **1. 阅读官网**
 
 &ensp;&ensp;&ensp;&ensp;官网永远是最权威的。参见[building-spark in Spark Document 2.4.3](http://spark.apache.org/docs/2.4.3/building-spark.html "building-spark in Spark Document 2.4.3")
 
@@ -57,9 +63,11 @@
 
 
 
-### 2. 开始编译
 
-#### 2.1 一行命令跑编译
+
+## **2. 编译与坑**
+
+### **2.1 一行命令跑编译**
 
 &ensp;&ensp;&ensp;&ensp;我编译成功后，总结出的一个基本思想是：以官网为编译大纲，以报错信息为debug主要依据，以思考和搜索引擎为debug主要辅助。
 
@@ -101,9 +109,9 @@ $ ./dev/make-distribution.sh \
 
 
 
-#### 2.2 磕磕碰碰爬坑
+### **2.2 磕磕碰碰爬坑**
 
-##### 2.2.1 `protocol version`和`parent.relativePath指向`问题
+#### **2.2.1 `protocol version`和`parent.relativePath指向`问题**
 
 &ensp;&ensp;&ensp;&ensp;一般采用Java7环境进行编译会产生该问题。
 
@@ -115,7 +123,7 @@ $ ./dev/make-distribution.sh \
 
 
 
-##### 2.2.2 `Cannot resolve dependencies`和`handshake_failure系列`
+#### **2.2.2 `Cannot resolve dependencies`和`handshake_failure系列`**
 
 &ensp;&ensp;&ensp;&ensp;前者一般是因为在**spark的pom.xml**中指定的仓库地址找不到hadoop2.6.0-cdh5.13.0的依赖包（因为根本没有啊），也可能是网络连接不稳定的问题（这是最崩溃的，我当时用宿舍校园网编译时网络就不是很稳定，这个错误一时有一时没有）；
 
@@ -158,7 +166,7 @@ $ ./dev/make-distribution.sh \
 
 
 
-##### 2.2.3 maven编译失败缓存问题
+#### **2.2.3 maven编译失败缓存问题**
 
 &ensp;&ensp;&ensp;&ensp;maven编译过程中的包下载failure会形成`*.lastUpdated`文件缓存到本地仓库，直到过了中心仓库的更新区间才会再次尝试抓取，除非被强制更新。当时因为网络问题时常断网，会导致fetch失败，所以：
 
@@ -168,7 +176,7 @@ $ ./dev/make-distribution.sh \
 
 
 
-##### 2.2.4 解压文件时候`gzip：stdin：unexpected end of file tar：归档文件中异常的 EOF`问题
+#### **2.2.4 解压文件时候`gzip：stdin：unexpected end of file tar：归档文件中异常的 EOF`问题**
 
 &ensp;&ensp;&ensp;&ensp;可以看出，是输入到解压命令的stdin流（即压缩文件）以异常的方式结束。
 
@@ -182,7 +190,7 @@ $ ./dev/make-distribution.sh \
 
 
 
-##### 2.2.5 `进程被杀死，${MVN_BIN}" -DzincPort=${ZINC_PORT} "$@`
+#### **2.2.5 `进程被杀死，${MVN_BIN}" -DzincPort=${ZINC_PORT} "$@`**
 
 &ensp;&ensp;&ensp;&ensp;这个问题让我曾想放弃源码编译，情况都是编译长时间卡住，最后显示进程被杀死。但我还是靠最后**冷静**的`Debug Loop`解决了这个问题！
 
@@ -217,7 +225,7 @@ $ ./dev/make-distribution.sh \
 
 
 
-##### 2.2.6 spark project core阶段的`testCompile：net.alchim31.maven：CompilerFailure`
+#### **2.2.6 spark project core阶段的`testCompile：net.alchim31.maven：CompilerFailure`**
 
 &ensp;&ensp;&ensp;&ensp;问题产生机理未明，估计是使用Java7导致的和Spark的版本冲突问题，可以尝试：
 
@@ -227,7 +235,9 @@ $ ./dev/make-distribution.sh \
 
 
 
-### 3. 手动释放内存
+
+
+## **3. 手动释放内存**
 
 &ensp;&ensp;&ensp;&ensp;编译涉及了大量的文件读写存取，这些文件的缓存可能把物理内存资源占完了（可通过`free -h`查看，其中`free`+`buffer/cache`就是物理内存容量）。导致应用被启动后会去申请swap分区内存。
 
@@ -251,9 +261,11 @@ $ sudo echo 3 | sudo tee /proc/sys/vm/drop_caches
 
 
 
-### 4. 小结
 
-#### 4.1 基本防雷措施
+
+## **4. 小结**
+
+### **4.1 基本防雷措施**
 
 - 镜像：给maven一个国内maven仓库镜像，给spark一个cloudera仓库镜像（加镜像应该是java项目开发常规操作吧orz）
 - 版本：强烈建议按照官网提及的版本套装配置环境（当时图方便用了内置的Java7进行编译，但以学习为目的，碰到问题又很想用Java7硬杠）
@@ -263,7 +275,8 @@ $ sudo echo 3 | sudo tee /proc/sys/vm/drop_caches
 - 网络：最好有能“畅通无阻”的网络以官网为参考大纲，以报错信息为debug主要依据，以思考和搜索引擎为debug主要辅助
 
 
-#### 4.2 基本Debug策略
+
+### **4.2 基本Debug策略**
 
 - 冷静：Debug注意带`脑子`（冲动是魔鬼
 - Debug Loop：`看日志` + `思考` + `尝试` + `看日志`  +  `搜索` + `思考` + `尝试` + `看日志`  +  `···`。注意用`脑子`，别人描述的问题不一定是我碰到的问题。
@@ -277,5 +290,5 @@ $ sudo echo 3 | sudo tee /proc/sys/vm/drop_caches
 
 -------
 
-By Divsigma@github.com
+<div align="center" >By Divsigma@github.com</div>
 
