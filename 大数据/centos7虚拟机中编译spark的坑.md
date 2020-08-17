@@ -6,18 +6,18 @@
 
 - [**1. 阅读官网**](#1-阅读官网)
 
-- [**2. 编译与坑**](2-编译与坑)
-  - [**2.1 一行命令跑编译**](21-一行命令跑编译)
-  - [**2.2 磕磕碰碰爬坑**](22-磕磕碰碰爬坑)
-    - [**2.2.1 `protocol version`和`parent.relativePath指向`问题**](#221-protocol-version和parent.relativepath指向问题)
-    - [**2.2.2 `Cannot resolve dependencies`和`handshake_failure系列`**](#222-cannot-resolve-dependencies和handshake-failure系列)
+- [**2. 编译与坑**](#2-编译与坑)
+  - [**2.1 一行命令跑编译**](#21-一行命令跑编译)
+  - [**2.2 磕磕碰碰爬坑**](#22-磕磕碰碰爬坑)
+    - [**2.2.1 `protocol version`和`parent.relativePath指向`问题**](#221-protocol-version和parentrelativepath指向问题)
+    - [**2.2.2 `Cannot resolve dependencies`和`handshake_failure系列`**](#222-cannot-resolve-dependencies和handshake_failure系列)
     - [**2.2.3 maven编译失败缓存问题**](#223-maven编译失败缓存问题)
-    - [**2.2.4 解压文件时候`gzip：stdin：unexpected end of file tar：归档文件中异常的 EOF`问题**](#224-解压文件时候-gzipstdinunexpected-end-of-file-tar归档文件中异常的-eof问题)
+    - [**2.2.4 解压文件时候`gzip：stdin：unexpected end of file tar：归档文件中异常的 EOF`问题**](#224-解压文件时候gzipstdinunexpected-end-of-file-tar归档文件中异常的-eof问题)
     - [**2.2.5 `进程被杀死，${MVN_BIN}" -DzincPort=${ZINC_PORT} "$@`**](#225-进程被杀死mvn_bin--dzincportzinc_port-)
     - [**2.2.6 spark project core阶段的`testCompile：net.alchim31.maven：CompilerFailure`**](#226-spark-project-core阶段的testcompilenetalchim31mavencompilerfailure)
 - [**3. 手动释放内存**](#3-手动释放内存)
 - [**4. 小结**](#4-小结)
-  - [**4.1 基本防雷措施**](#41-基本防雷策略)
+  - [**4.1 基本防雷措施**](#41-基本防雷措施)
   - [**4.2 基本Debug策略**](#42-基本debug策略)
 
 
@@ -328,9 +328,13 @@ $ sudo echo 3 | sudo tee /proc/sys/vm/drop_caches
 
 
 
+<br />
 
+<br />
 
 -------
 
-<div align="center" >By Divsigma@github.com</div>
+
+
+<div align="center">by Divsigma@github.com</div>
 
