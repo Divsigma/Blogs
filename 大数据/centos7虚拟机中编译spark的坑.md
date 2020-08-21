@@ -60,10 +60,10 @@
 
 > 背景知识：
 >
-> - code cache用于存放JVM生成的native code，主要是JIT编译器生成的Java方法机器码；
+> - code cache用于存放JVM生成的native code，主要是JIT编译器生成的Java方法机器码（也就是native code）；
 > - 它一般被设置为32M/48M，对大多数Java应用都是够用的——应用在执行的整个过程中JIT都可以无忧无虑地编译代码放入code cache；
 > - degradation的原因有很多：
->   - JIT对 code cache的flushing占用CPU
+>   - JIT对code cache的flushing占用CPU
 >   - JIT对new "hot" codes的compile占用CPU
 >   - 这段时间内代码执行恢复慢速的interpreted execution等等；
 > - 具体的flushing策略也有考究，常用的是speculative flushing——类似LRU机制
@@ -72,16 +72,15 @@
 >
 > 参考链接：
 >
-> - Configuring Apache Maven：https://maven.apache.org/configure.html
+> - MAVEN_OPTS of Apache Maven：https://maven.apache.org/configure.html
 > - Java Virtual Machine Configuration：https://docs.oracle.com/cd/E13174_01/alui/deployment/docs604/maintenance/a_jvm_switches.html
-> - Java Tuning：
+> - Java Tuning On Code Cache：
 >   - https://docs.oracle.com/cd/E13222_01/wls/docs81/perform/JVMTuning.html
+>   - https://docs.oracle.com/javase/8/embedded/develop-apps-platforms/codecache.htm#JEMAG207
 >   - https://juejin.im/post/6844903601786060808
->   - https://cloud.tencent.com/developer/article/1408773
->
-> - Java Code Cache Size：https://docs.oracle.com/javase/8/embedded/develop-apps-platforms/codecache.htm#JEMAG207
->
-> - Difference among four kinds of code：https://www.quora.com/What-is-the-difference-between-bytecode-native-code-machine-code-and-assembly-code
+>- https://cloud.tencent.com/developer/article/1408773
+>   
+>- Difference among four kinds of code：https://www.quora.com/What-is-the-difference-between-bytecode-native-code-machine-code-and-assembly-code
 
 
 
