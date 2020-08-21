@@ -62,8 +62,8 @@
 
   &ensp;&ensp;&ensp;&ensp;重写equals()必须重写hashCode()，且要保证equals()返回true时hashCode()也必然返回true。
 
-> - [https://docs.oracle.com/javase/7/docs/api/java/lang/Object.html#:~:text=If%20two%20objects%20are%20equal,lang.](https://docs.oracle.com/javase/7/docs/api/java/lang/Object.html#:~:text=If two objects are equal,lang.)
-> - [https://dzone.com/articles/working-with-hashcode-and-equals-in-java#:~:text=The%20Contract%20Between%20equals()%20and%20hashcode()&text=If%20two%20objects%20are%20equal,produce%20the%20same%20integer%20result.](https://dzone.com/articles/working-with-hashcode-and-equals-in-java#:~:text=The Contract Between equals() and hashcode()&text=If two objects are equal,produce the same integer result.)
+> - [https://docs.oracle.com/javase/7/docs/api/java/lang/Object.html](https://docs.oracle.com/javase/7/docs/api/java/lang/Object.html)
+> - [https://dzone.com/articles/working-with-hashcode-and-equals-in-java](https://dzone.com/articles/working-with-hashcode-and-equals-in-java)
 
 
 
