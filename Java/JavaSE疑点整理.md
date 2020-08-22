@@ -2,6 +2,8 @@
 
 &ensp;&ensp;&ensp;&ensp;此篇旨在整理一些JavaSE中值得注意的疑点和区分点（应该会不断更新）。
 
+&ensp;&ensp;&ensp;&ensp;内容尽量来源于Oracle JavaSE的官方文档，每问后尽量附上参考链接
+
 
 
 <br />
@@ -10,9 +12,86 @@
 
 # 正文
 
+## 1. 基础
+
+### 1. 为什么有Java
+
+- 最初用于为网络设备搭建应用，并解决软件的平台依赖问题
+
+> See 1.1 of https://docs.oracle.com/javase/specs/jvms/se8/jvms8.pdf
+
+
+
+<br />
+
+<br />
+
 ## 1. JVM
 
+### 1. 什么是JVM
 
+- 1）一个有着指令集并负责管理运行时内存的虚拟计算机
+- 2）它与Java语言无关，只会识别并执行`.class`文件，该文件包含了JVM的指令和符号表（就像某一架构上的汇编代码）
+
+> See 1.2 of https://docs.oracle.com/javase/specs/jvms/se8/jvms8.pdf
+
+
+
+### 2. JVM支持的数据类型有哪些
+
+- 1）Primitive Type：
+  - 在Java语言中有对应的：numerical type（byte、char、short、int、long、double、float）、boolean type
+  - 在Java语言中没有对应的（仅用于JVM指令）：returnAddress type——指向JVM指令的操作码（opcodes of JVM instructions）
+
+- 2）Reference Type：
+  - 该类型对应Java语言中引用类型，在JVM中分三大类，class type、array type、interface type
+  - array type：包含component type数据的一维数据类型，component type可以是JVM支持的数据类型（即嵌套）；但最后必须落实到一种element type——primitive type、class type或interface type
+
+> See 2.2, 2.3 and 2.4 of https://docs.oracle.com/javase/specs/jvms/se8/jvms8.pdf
+
+
+
+### 3.  JVM运行时数据分区是怎样的？各区作用？
+
+- 1）PC Register
+  - 每个线程独享自己的pc Register；
+  - 若当前线程在执行的是native方法则pc为undefined；否则pc指向当前执行的指令地址（不同于IA-32架构的PC？）
+- 2）JVM Stacks——类比Linux进程图像中`栈`段
+  - 每个线程独享自己的JVM Stack；
+  - 它由frame（栈帧）构成，保存局部变量与部分结果，帮助实现函数调用与返回（与Linux进程图像中`栈`段类似）；
+  - frame可以被动态分配（may be heap allocated），无须连续（与Linux进程图像中`栈`段不同），可以被指定最大最小值（与Linux进程图像中`栈`段类似）；
+  - 两种相关错误：
+    - 当线程需求栈帧大小超过限定值时报`StackOverflowError`；
+    - 当线程需求的栈帧在堆中无法进行分配（如空间不足或不足以给下一个线程分配最小栈帧）时报`OutOfMemoryError`
+- 3）Heap
+  - 所有线程共享一个Heap；
+  - 它在JVM启动时即被创建，保存所有类实例（包含了非static的成员变量）与数组；
+  - 它的空间管理由garbage collector管理，可以固定大小、动态缩小/扩大、指定最大最小值。GC系统方案由JVM的实现方提供；
+  - 相关错误：
+    - 当GC无法清理出满足要求的堆空间时报`OutOfMemoryError`
+- 4）Method Area——类比Linux进程图像中`.text`段
+  - 所有线程共享一个Method Area；
+  - 它在JVM启动时即被创建，保存所有类的结构（在运行时常量池中，包含了static修饰的成员）、方法代码和构造器（与Linux进程图像中`.text`段功能类似）
+  - 它可以固定大小或动态变化，它的空间逻辑上属于heap的一部分，但GC实现应该避免修改这部分区域大小与内容
+  - 相关错误
+    - 当没有足够的方法区空间供分配时报`OutOfMemoryError`
+- 5）Constant Pool——类比Linux进程图像中`.text`段的`.symbol`部分
+  - 属于Method Area的一部分
+  - 它在每个类或接口被创建（通过loader加载）时创建；
+  - 它保存每个类或接口的结构（描述信息，包括static修饰的成员），可以看作`.class`文件中`constant pool`表的”运行时状态“；
+  - 相关错误：
+    - 当没有足够的方法区空间供创建类或接口时报`OutOfMemoryError`
+- 6）Native Method Stacks
+  - 每个线程独享自己的Native Method Stack；
+  - 它只为native method服务，基本特点及相关错误类似JVM Stacks
+
+> - See 2.5 of https://docs.oracle.com/javase/specs/jvms/se8/jvms8.pdf
+> - What's the meaning of `native` keyword in Java: https://www.geeksforgeeks.org/native-keyword-java/
+> - What's the difference of `native code` and `bytecode`: https://www.quora.com/What-is-the-difference-between-bytecode-native-code-machine-code-and-assembly-code
+
+
+
+### 4. JVM的堆是由GC管理的，那么GC如何管理Heap？
 
 
 
