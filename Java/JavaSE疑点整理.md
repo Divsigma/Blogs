@@ -14,7 +14,7 @@
 
 ## 1. 基础
 
-### 1. 为什么有Java
+### 1. 为什么有Java？
 
 - 最初用于为网络设备搭建应用，并解决软件的平台依赖问题
 
@@ -28,7 +28,7 @@
 
 ## 1. JVM
 
-### 1. 什么是JVM
+### 1. 什么是JVM？
 
 - 1）一个有着指令集并负责管理运行时内存的虚拟计算机
 - 2）它与Java语言无关，只会识别并执行`.class`文件，该文件包含了JVM的指令和符号表（就像某一架构上的汇编代码）
@@ -37,7 +37,7 @@
 
 
 
-### 2. JVM支持的数据类型有哪些
+### 2. JVM支持的数据类型有哪些？
 
 - 1）Primitive Type：
   - 在Java语言中有对应的：numerical type（byte、char、short、int、long、double、float）、boolean type
@@ -91,7 +91,104 @@
 
 
 
-### 4. JVM的堆是由GC管理的，那么GC如何管理Heap？
+### 4. 什么是GC？为什么要有GC？
+
+- 1）什么是GC？
+  - GC即Garbage Collector，是VM中自动管理内存的机制。
+  - 它的功能主要有：
+    - 从OS申请并分配内存
+    - 确保仍被引用的对象留在内存（used by application）
+    - 回收不再被引用的对象占用的内存（这种对象称为Garbage）
+  - 它的评估指标主要有：
+    - 吞吐量（Throughput）：一段时间内CPU用于非GC操作的时间占比；
+    - 暂停时间（Pause Time）：GC发生时应用暂停的总时长；
+    - Footprint（还不知咋翻译）：进程的工作集；
+    - Promptness（同样还不知咋翻译orz）：对象实例被判定为垃圾到其占用内存被回收的时间
+  - 它对内存的管理思想是世代收集（`Generational Collection`）：
+    - 基于`Weak Geneartional Hypothesis`（即a majority of objects "die young"），内存被划分为`Generations`。最常见的就是划分为新生代区（`Young Generation`）和老年代区（`Old Generation`），对象被按照存活时间放入相应区域；
+    - 不同区可以采用不同的收集算法，`Young Generation`的收集称为`Minor Collection`，所有`Generation`的收集称为`Major Collection`（或`Full Collection`）；
+    - `Young Generation`的GC算法更关注时间效率（该区的GC发生次数多），`Old Generation`的GC算法更关注空间效率（该区占据大部分堆区域）
+- 2）为什么要有GC？
+  - 将程序员从繁琐的动态内存管理中解放，因为动态内存管理可能出现难以调试的bugs、发生`dangling reference`和`space leaks`
+
+> - See 2 and 3 of https://www.oracle.com/technetwork/java/javase/memorymanagement-whitepaper-150215.pdf
+> - See 1 and 3 of https://docs.oracle.com/javase/9/gctuning/introduction-garbage-collection-tuning.htm
+
+
+
+### 5. HotSpot JVM中GC如何管理内存？
+
+- 1）`Generational Collection`图谱（HotSpot Generations）
+
+  - `Young Generation` + `Old Generation` + `Permanent Generation`。对象在`Young Generation`被实例化，经过若干次`Minor collection`后依旧存活的对象被移入`Old Generation`，`Old Generation`根据不同算法适时触发`Major Collection`（一般在`Old Generation`或`Permanent Generation`满时触发）。
+  - `Young Generation` 被划分为1个`Eden`和2个`Survivor Space`。
+  - 占用空间较大的对象会被直接分配到`Old Generation`；
+  - `Permanent Generation`存放便于GC运作的数据，如类的结构描述、方法等。
+
+- 2）Garbage Collector的常用算法
+
+  - `Young Generation`中
+
+    - 复制算法。
+
+      &ensp;&ensp;&ensp;&ensp;大部分对象在`Eden`新生，在`Survivor Space`间辗转（一次`Minor Collection`会回收`Eden`和1个`Survivor Space`，完成一次辗转），辗转达到一定次数后则完成`Aging`（或称为`Promotion`），被移入`Old Generation`；
+
+  - `Old Generation`中
+
+    - Mark-Compact算法（“标记-整理”算法）
+
+      &ensp;&ensp;&ensp;&ensp;识别存活的对象、滑动紧缩
+
+    - Mark-Sweep算法（“标记-清除”算法）
+
+      &ensp;&ensp;&ensp;&ensp;识别死亡的对象、标记为清除
+
+> - See 4 of https://www.oracle.com/technetwork/java/javase/memorymanagement-whitepaper-150215.pdf
+> - See 3 of https://docs.oracle.com/javase/9/gctuning/garbage-collector-implementation.htm
+> - 受不了了，Oracle的资料好乱，找了一天都找不到网上讲的7种收集器
+>   - 7种收集器：https://crowhawk.github.io/2017/08/15/jvm_3/
+>   - 7种收集器：https://blogs.oracle.com/jonthecollector/our-collectors
+>   - 7种收集器：https://juejin.im/post/6844903685374377998
+
+
+
+### 6. HotSpot JVM的收集器有哪几种？
+
+- 1）Serial Collector
+  - 单线程。听说还分用于新生代的Serial和用于老生代的SerialOld
+- 2）Parallel Collector
+  - 多线程。听说还分用于新生代的ParNew（关注pause time）&ParallelScavenge（关注throughput）和用于老生代的ParallelOld，而且ParallelScavenge只能跟SerialOld或ParallelOld配合（？
+- 3）CMS Collecotor (Concurrent-Mark-Sweep)
+  - 初始标记（STW、单线程。标记GC Root）、并发标记（多线程）、重新标记（STW、多线程。处理并发标记阶段改变的标记）、并发清理（单线程？）
+  - 官网也说CMS只是老生代GC算法，需要配合Parallel方式的新生代GC算法使用
+- 4）G1 Collector
+  - 初始标记（STW、单线程。标记GC Root）、并发标记（单线程？）、最终标记（STW、多线程。处理并发标记阶段改变的标记，将线程的Remembered Set Logs并入Region的Remebered Set）、筛选回收（因为G1实现可预测停顿，所以它会在满足停顿时间要求前提下，优先回收价值最大（？）的）
+- 5）ZGC
+  - Java11后的新特性！
+
+> 受不了了，Oracle的资料好乱，找了一天都找不到网上讲的7种收集器
+>
+> - 7种收集器：https://crowhawk.github.io/2017/08/15/jvm_3/
+> - 7种收集器：https://blogs.oracle.com/jonthecollector/our-collectors
+> - 7种收集器：https://juejin.im/post/6844903685374377998
+
+
+
+### 7. 为什么要GC调优？如何进行GC调优？
+
+- 1）为什么要GC调优？
+  - 因为大部分GC都采用了并行优化，这可能导致多核多线程处理器上GC占据过多处理器时间，进而导致应用吞吐量急剧下降（见参考链接中的Figure 1-1）。所以小规模系统上（如本地环境）可忽略的吞吐量问题部署到大规模系统上（如生产环境）后可能成为性能瓶颈；
+  - 为解决上述问题，须根据应用场景、系统环境选择GC并进行调优
+- 2）如何进行GC调优？
+- 
+
+> - See `Introduction` of https://docs.oracle.com/javase/9/gctuning/introduction-garbage-collection-tuning.htm
+
+
+
+
+
+
 
 
 
