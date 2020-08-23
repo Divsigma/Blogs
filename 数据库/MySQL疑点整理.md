@@ -89,9 +89,47 @@
 
 
 
-### 4. 为什么MySQL的InnoDB默认采用`REPEATABLE_READ`
+### 4. InnoDB有几种Isolation level？各自特点是？
 
 
+
+
+
+
+
+### 5. 为什么MySQL的InnoDB默认采用`REPEATABLE_READ`？
+
+- 据说是历史原因（还没在官网找到根据）：
+
+  &ensp;&ensp;&ensp;&ensp;MySQL采用Binlog记录操作，用于复制和恢复。Binlog按照串行化的操作顺序记录，记录格式有三种：`STATEMENT`、`ROW`和`MIX`。
+
+  &ensp;&ensp;&ensp;&ensp;`STATEMENT`按照事务的`COMMIT`顺序记录，`ROW`根据各行数据实际变更顺序记录，`MIXED`综合前两种方式（具体待补充）。MySQL5.1以前`binlog_forma`只有`STATEMENT`格式，5.1以后才有`ROW`和`MIXED`格式。但根据`READ_COMMITTED`级别下Binlog复制出来的结果可能产生写丢失，如：
+
+  &ensp;&ensp;&ensp;&ensp;`T1`先`DELETE` `行R`，`T2`再`INSERT` `行R`，`T2`先`COMMIT`，`T1`再`COMMIT`。
+
+  &ensp;&ensp;&ensp;&ensp;上述序列原执行结果应该有`行R`，但根据按`COMMIT`顺序记录的Binlog还原出来的结果则无`行R`
+
+  &ensp;&ensp;&ensp;&ensp;所以MySQL默认采用了会对`UPDATE`、`DELETE`和`locking reads`操作加锁的`REPEATABLE_READ`，保证了写可串行化。如果需要在`READ_COMMITTED`级别支持写可串行化，需要设置`binlog_format`为`ROW`或`MIXED`。
+
+> - 别人的实验结果：https://www.cnblogs.com/vinchen/archive/2012/11/19/2777919.html
+> - "Only row-based binary logging is supported with the `READ_COMMITTED` ": https://dev.mysql.com/doc/refman/8.0/en/innodb-transaction-isolation-levels.html
+
+
+
+for 4. 
+
+- InnoDB是一个multi-versioning存储引擎（为了支持事务的并发和回滚），数据行R的多版本信息被存放到rollback segment，InnoDB会给行R新增DB_ROLL_PTR字段以指向对应的rollback segment中对应的undo log record。InnoDB利用DB_ROLL_PTR指向的信息进行回滚、提供consistent read
+- consistent read是一种利用snapshot呈现查询信息的读取操作，该读取操作不限制其他事务对查询数据的修改。RR和RC级别对SELECT默认采用这种机制。
+- undo log record分insert和update两种，前者在事务提交后即可抹去，后者还需要为consistent read服务直到被服务的事务提交（所以要定期commit事务！否则rollback segment很大！）
+- 即避免锁机制而采用读取snapshot
+- 对于一个事务中的non-locking SELECT，均读取第一次读取时产生的snapshot（如果是READ_COMMITTED则读取fresh snapshot）
+- cluster index -- InnoDB对primary key index的称呼，InnoDB会按照cluster index安排表结构（每张表都要有cluster index，否则InnoDB会自动选取或生成隐藏索引DB_ROW_ID）
+- secondary index -- 除cluster index以外的索引，它包含primary key columns（给InnoDB在cluster index中查找相应的行）和索引特定的columns
+- Record lock -- 索引行上的锁。因InnoDB的表记录总有cluster index，所以该定义总是有意义的；
+- Gap lock -- 索引行之间的锁。用于防止两个索引行对应索引值之间被插入新记录（purely inhibitive）
+- InnoDB的REPEATABLE_READ用锁机制应对locking reads、UPDATE和DELETE：按情况选择record lock或gap lock或next-key lock；
+- InnoDB的REPEATABLE_READ用consistent read应对plain SELECT（而不是锁机制）的Non-repeatable read：相同SELECT语句的query结果都是事务中第一次出现该语句时产生的snapshot。注意snapshot仅对SELECT语句的查询结果产生影响，不会限制其他DML语句的行为——事务（包括当前事务）仍然修改表的最新数据，尽管当前事务的SELECT语句无法看到修改的结果（例子见官网的Consistent Nonlocking Reads）。如果能看到最新修改结果，那就是READ_COMMITTED或者执行了locking reads；
+- InnoDB的REPEATABLE_READ用next-key locking防止Phantom：首先扫描表索引，给扫描到的所有index record加S/X锁（此时row-level locks就是index-record locks），然后给这些records之间加gap lock（锁住每个index record之前的索引值，防止更新）
 
 
 
@@ -116,6 +154,7 @@
   |    Transaction(ACID)     |     √     |            |
   |       Data Caches        |     √     |            |
   |       Foreign Key        |     √     |            |
+  |           MVCC           |     √     |            |
   |      Storage Limits      |   64TB    |   256TB    |
   |   Locking granularity    |    Row    |   Table    |
   |   Application Scenario   | (Default) | Read-heavy |
