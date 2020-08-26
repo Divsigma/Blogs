@@ -20,20 +20,27 @@
 - 它用C语言编写（ANSI C），主要存储模型是键值对，“键”是字符串，但“值”可以是多种数据结构，如字符串、列表（Linked List）、集合（Set）、有序集合（Sorted Set）、哈希表、流（Streams）等等；
 - 
 
+> https://redis.io/topics/introduction
+
 
 
 ### 2. 如何实现多个Redis命令的原子性？
 
 - 1）用Redis事务
-  - 实现：用`WATCH`给变量加乐观锁（provide Check-And-Set behavior），用`MULTI`将创建事务队列，用`EXEC`一次性执行事务队列的命令
+  - 实现：用`WATCH`给变量加乐观锁（provide Check-And-Set behavior），用`MULTI`将创建事务队列，用`EXEC`一次性执行事务队列的命令；
   - 大致原理：
     - `EXEC`让Redis事务队列中命令串行执行，无法被其他命令（不同于MySQL的事务），从而实现多个命令的原子性。所以Redis的事务执行过程中，仅有编程性错误（如操作错误数据类型，这种低级问题在生产上是不会发生的！），所以Redis不提供回滚机制而且在事务的某条命令错误后会继续执行。抛弃回滚机制提升了简化了Redis实现并提升了它处理事务的效率；
     - `WATCH`给监控的key加乐观锁，主要防止加锁后到调用`EXEC`前key发生变化。调用`EXEC`时，Redis自动释放所有key上的`WATCH`，并检查它们是否有被修改，若有则abort事务，若无则执行队列中命令。
-  - 
 - 2）用Lua脚本
-- 
+  - 实现：`EVAL`/`EVALSHA`执行脚本字符串；
+  - 大致原理：Redis保证了`EVAL`的命令是由同一个Lua解释性解释执行的，执行过程无法被打断
 - 3）两种方式优缺点对比？
-- 
+  - 脚本是在Redis2.6后引入的，用它执行事务写起来更方便，在持久化、解析执行上都比多条命令组成的Redis事务更高效，在主从复制时也能节省网络带宽；
+  - 但利用脚本复制也有局限，脚本中的写命令只能操作数据库中确定的元素（如系统时间、随机返回的元素则不确定），否则会导致主从不一致（可以用`script effects replication`的复制机制解决，该机制解析脚本并将命令封装为Redis事务再进行传输并计入AOF，此时可以操作不确定元素）；
+  - 保留Redis事务机制似乎只是为了语义上的价值（？
+
+> - Transactions of Redis: https://redis.io/topics/transactions
+> - Lua Script of Redis: https://redis.io/commands/eval
 
 
 
@@ -59,6 +66,8 @@
     - 通过执行命令的模式进行复制时，可能有主从不一致问题；
 - 文档说计划合并两种方式（毕竟RDB好用，性能也不错，但AOF粒度比较好能保证更好的durability）
 
+> https://redis.io/topics/persistence
+
 
 
 ### 4. 简述Redis的复制机制
@@ -69,6 +78,8 @@
   - 部分重新同步（partial resynchronization）：主从节点连接断开并重连后，主节点先发送链接断开期间的命令流，再按命令流方式继续发送命令。部分重新同步的实现基于主节点的数据库快照使用`Replication ID, offset`结构来维护的，从节点将它保存的这份信息传送给主节点，主节点就会发送欠缺部分；
   - 完全重新同步（full resynchronization）：上述两种方式都失效后，从节点请求完全重新同步。此时主节点会缓存客户端输入的命令，同时启动进程生成RDB快照并传送给从节点，最后传送缓冲的命令。从节点接收RDB文件后载入，最后接受主节点发送的缓冲命令。
 - 注意：主节点虽然可以知道从节点对命令流的执行情况，但Redis为保证低时延和高性能，默认采用异步复制方式；
+
+> https://redis.io/topics/replication
 
 
 
