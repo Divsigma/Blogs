@@ -65,7 +65,7 @@
     - 当线程需求的栈帧在堆中无法进行分配（如空间不足或不足以给下一个线程分配最小栈帧）时报`OutOfMemoryError`
 - 3）Heap
   - 所有线程共享一个Heap；
-  - 它在JVM启动时即被创建，保存所有类实例（包含了非static的成员变量）与数组；
+  - 它在JVM启动时即被创建，保存所有类实例（包含了非static的成员变量）与数组（但也有特殊情况，”逃逸分析”了解一下）；
   - 它的空间管理由garbage collector管理，可以固定大小、动态缩小/扩大、指定最大最小值。GC系统方案由JVM的实现方提供；
   - 相关错误：
     - 当GC无法清理出满足要求的堆空间时报`OutOfMemoryError`
@@ -186,9 +186,38 @@
 
 
 
+### 8. 简述JVM的类加载过程？
+
+- 1）加载（Load）：在方法区创建`Class`对象，并解析导入`.class`文件；
+  - 非数组类由class loader加载`.class`文件创建，数组类没有`.class`文件则由JVM创建；
+  - 概念上两种类加载器区分：defining class loader（直接加载类/接口的加载器）和initializing loader（调用类/接口defining class loader的“根”加载器）；
+  - 运行时，一个类/接口由它的名字和defining class loader才能唯一决定（可统称为run-time package）
+- 2）链接（Link）：验证（Verification）、准备（Preparation）、解析（Resolution，可选）三过程；
+  - 验证：验证`.class`文件格式；
+  - 准备：为静态变量分配空间并用默认值初始化（显式初始化在第三阶段进行）；
+  - 解析：确定运行时常量池中符号引用的具体值（转为直接引用）；
+- 3）初始化（Initialize）：运行类/接口中初始化函数`<clinit>()`
+  - 编译器自动收集类中静态变量的赋值和static块语句并按顺序合并成`<clinit>()`方法
+  - 子类初始化前需要先进行父类初始化
+  - 为保证该过程的线程安全性，JVM会采用锁机制（所以要避免在静态代码块中执行耗时过长的操作！）
+
+> - See Chapter 5 of https://docs.oracle.com/javase/specs/jvms/se9/jvms9.pdf（好难看懂啊orz）
+>
+> - 源于官方文档的解析：http://fanyilun.me/2018/12/29/理解Java类加载机制/
+>
+> - 有三道加载流程的面试题：https://www.cnblogs.com/chanshuyi/p/the_java_class_load_mechamism.html（注意理解最后一个）
+>
+> - 类加载机制（包括加载器、加载模式）（乱orz）
+>
+>   - https://juejin.im/post/6844903881936207886#heading-8
+>
+>   - https://juejin.im/post/6844903862575300622
 
 
 
+### 9. NIO
+
+- **挖坟**
 
 
 
@@ -197,6 +226,10 @@
 <br />
 
 ## 2. 数据类型
+
+### 1. Java集合和数据结构
+
+- **挖坟**
 
 
 
@@ -261,9 +294,33 @@
 
 > - https://www.geeksforgeeks.org/constructors-not-inherited-java/
 
+
+
+### 4. 反射
+
+- **挖坟**
+
+
+
 <br />
 
 <br />
+
+## 5. 多线程
+
+### 1. 挖坟
+
+
+
+<br />
+
+<br />
+
+## 6. 设计模式
+
+### 1. 挖坟
+
+
 
 ----
 
