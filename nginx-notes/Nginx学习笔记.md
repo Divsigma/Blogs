@@ -204,389 +204,133 @@ make install
 
 ## 3.3 主从进程管理
 
-书上说的，我也不知道：
+### 3.3.1 进程资源结构体（参见core/ngx_cycle.h注释）
 
 - P255：Nginx则不然 ，它不会使用进程或线程来作为事件消费者，所谓的事件消费者只能是某个模块（在这里没有进程的概念）。只有事件手机、分发器才有资格占用进程资源，它们会在分发某个事件时调用事件消费模块使用当前占用的进程资源。
-
 - P260、P263、P297：Nginx核心的框架代码一直在围绕着一个结构体展开，它就是ngx_cycle_t。......每一个进程毫无例外地拥有唯一一个ngx_cycle_t结构体。服务在初始化时就以ngx_cycle_t对象为中心来提供服务，在正常运行时仍然会以ngx_cycle_t对象为中心。ngx_cycle_t保存配置文件信息、日志文件信息、连接池信息、监听池信息、占用文件信息、读写事件信息等，连接对象及其读写事件对象在此被预分配（书P297）
 
-  ```c
-  typedef struct ngx_cycls_s ngx_cycle_t;
-  struct ngx_cycle_s {
-      // 指向所有模块的配置结构体，是一个指针数组，数组的每个元素又指向一个指针数组，但不是二级目录
-      // 对event模块的配置结构体，可参考书P299~302和图9-2来理解：
-      //   (*conf_ctx[module.index])[module.ctx_index]
-      // 对HTTP模块的配置结构体，可参考书P354~355和图10-1来理解：
-      //   (*conf_ctx[module.index]).main_conf[module_ctx_index]
-      void ****conf_ctx;
-      // 内存池
-      ngx_pool_t *pool;
-      ....
-      ngx_connection_t *free_connections;
-      ngx_uint_t free_connection_n;
-      ...
-      // 动态数组，每个数组元素存储着ngx_listening_t成员，表示监听端口及相关参数
-      ngx_array_t listening;
-      ...
-      // 当前进程中所有连接对象总数，亦等于当前进程中所有的读事件/写事件总数
-      ngx_uint_t connection_n;
-      // 指向当前进程中所有连接对象，充当连接池，在ngx_event_core_module中预分配数组（书P306）
-      ngx_connection_t *connections;
-      // 指向当前进程中所有读事件，与connections对应，在ngx_event_core_module中预分配数组
-      ngx_event_t *read_events;
-      // 指向当前进程中所有写事件，与connections对应，在ngx_event_core_module中预分配数组
-      ngx_event_t *write_events;
-      ...
-  };
-  ```
+### 3.3.2 进程信息结构体（参见os/unix/ngx_process.h注释）
 
 - P271：master进程不需要处理网络事件，它不负责业务的执行，只会通过管理worker子进程来实现重启服务、平滑升级、更换日志文件、配置文件实时生效等功能。
 
-- P272：下面定义了ngx_processes**全局数组**，虽然**子进程中也会有ngx_processes数组，但这个数组仅仅是给master进程使用的**。
-
-  ```c
-  // 定义1024个元素的ngx_processes数组，也就是最多只能有1024个子进程
-  #define NGX_MAX_PROCESSES 1024
-  // 当前操作的进程在ngx_processes数组中的下标
-  ngx_int_t ngx_process_slot;
-  // ngx_processes数组中有意义的ngx_process_t元素中最大的下标
-  ngx_int_t ngx_last_process;
-  // 存储所有子进程的数组，元素的初始化在父进程调用生成子进程时调用的ngx_spawn_process中进行
-  ngx_process_t ngx_processes[NGX_MAX_PROCESSES];
-  ```
+- 进程信息保存在ngx_processes**全局数组**，虽然**子进程中也会有ngx_processes数组，但这个数组仅仅是给master进程使用的**。
 
   master进程中所有子进程相关的状态信息都保存在ngx_processes数组中
 
-  ```c
-  // 启动一个子进程的方法，其中包含了fork和子进程结构体的初始化（ngx_processes[i]）
-  ngx_pid_t ngx_spawn_process(ngx_cycle_t *cycle, ngx_spawn_proc_pt proc, void *data, char *name, ngx_int_t respawn)
-  
-  // 子进程循环方法的函数指针类型
-  // ngx_cycle_t中的worker进程的工作循环定义参数与此相同
-  typedef void (*ngx_spawn_proc_pt) (ngx_cycle_t *cycle, void *data);
-  
-  // ngx_process_t结构体定义
-  typedef struct {
-      // 进程id
-      ngx_pid_t pid;
-      // 由waitpid系统调用获取到的进程状态
-      int status;
-      // 由socketpair产生的用于master父进程与worker子进程通信的socket句柄
-      ngx_socket_t channel[2];
-      // 子进程循环方法，
-      ngx_spawn_proc_pt proc;
-      // 与ngx_spawn_proc_pt中第2个参数等价
-      // worker子进程不需要传入，cache manage进程需要ngx_cache_manager_ctx*
-      void *data;
-      // 进程名字。操作系统中显示的进程名称与name相同。
-      char *name;
-      // 标志位，=1表示正在重新生成子进程
-      unsigned respawn:1;
-      // 标志位，=1表示正在生成子进程
-      unsigned just_spawn:1;
-      // 标志位，=1表示正在分离父子进程
-      unsigned detached:1;
-      // 标志位，=1表示正在退出本进程
-      unsigned exiting:1;
-      // 标志位，=1表示已经退出本进程
-      unsigned exited:1;
-  } ngx_process_t;
-  ```
-
 - 书P269、P273：master如何通知worker进程停止服务或更换日志文件呢？对于这样控制进程运行的进程间通信方式，Nginx采用的是信号。因此，worker进程中会有一个方法来处理信号——void ngx_signal_handler(int signo)。......ngx_processes数组中这些进程的状态是怎么改变的呢？依靠信号！
 
-## 3.4 监听对象、连接对象、请求对象和读写事件对象
+## 3.4 关键对象：监听对象、连接对象、请求对象、读写事件对象
 
-- 202200819-overview：Nginx中比较关键的是连接对象。一个连接对象对应一对读写事件，读写事件各自有自己的回调函数来完成事件被触发时需要执行的操作。目前来看，一个连接对象**有且仅有一对**读写对象，Nginx的HTTP框架通过**分阶段改变连接读写对象的回调函数**来实现连接在不同阶段的不同操作。Nginx进程的ngx_cycle_t会保存一个动态数组，存储其监听对象。目前我把监听对象看作一种特殊的连接对象，所以listen->connection->read->handler负责accept的操作。
-
-- P292、P288~290：ngx_connection_t结构体
-
-  ```c
-  // 被动链接
-  struct ngx_connection_s {
-      // 未使用时指向连接池中下一个空闲的连接（next指针），
-      // 对应的内存由ngx_event_core_module解析配置时预分配，
-      // 连接后，意义由使用它的Nginx模块决定，如HTTP框架中则指向ngx_http_request_t
-      void *data;
-      // 连接对应的读事件，对应的内存由ngx_event_core_module解析配置时预分配（书P302）
-      // 到所属进程的ngx_cycle_t中
-      分配的空间指针保存到Nginx管理进程的ngx_cycle_t中（见3.3主从进程管理）
-      // Nginx认为每个连接至少有一个读写事件，所以
-      // 在所属进程的ngx_cycle_t的连接池中，连接、读事件、写事件通过相同序号对应
-      ngx_event_t *read;
-      // 连接对应的写事件
-      ngx_event_t *write;
-      ngx_socket_t fd;
-      // 直接接收网络字符流的方法，ngx_recv_pt原型是
-      // typedef ssize_t (*ngx_recv_pt)(ngx_connection_t *c, u_char *buf, size_t size);
-      ngx_recv_pt recv;
-      // 直接发送网络字符流的方法，ngx_send_pt原型是
-      // typedef ssize_t (*ngx_send_pt)(ngx_connection_t *c, u_char *buf, size_t size);
-      ngx_send_pt send;
-      // 这个连接对应的ngx_listening_t监听对象，此连接由listening监听端口的事件建立
-      ngx_listening_t *listening;
-      ...
-  };
-  ```
+### 3.4.1 监听对象（参见core/ngx_connection.h注释）
 
 - P261：ngx_listening_t结构体
 
-  ```c
-  typedef void (*ngx_connection_handler_pt) (ngx_connection_t *c)
-  
-  // 监听对象
-  struct ngx_listening_s {
-      ...
-      // 新的TCP连接成功建立后被回调的处理方法，
-      // 一般用于初始化从这个监听对象产生的新连接对象，比如设置新连接对象的
-      // connection->read->handler并把该连接对象的读事件加入epoll
-      // HTTP框架中，该方法是ngx_http_init_request
-      ngx_connection_handler_pt handler;
-      ...
-      ngx_listening_t *previous;
-      // 当前监听句柄对应的ngx_connection_t结构体
-      // （即监听对象是一种特殊的connection？利用ngx_connection_t中的read对象来accept连接）
-      ngx_connection_t *connection;
-      ...
-  };
-  ```
+### 3.4.2 连接对象（参见core/ngx_connection.h注释）
 
-- P391：ngx_http_request_t结构体。而一个请求会被包装成ngx_http_request_t结构体（书P391），其中的phase_handler用作phase engine结构体中handlers数组的下标。HTTP框架就是用这种方式把各个HTTP模块集成起来处理请求的。结构体中的read_event_handler和write_event_handler是针对异步处理机制设立的，Nginx针对请求的读写被划分成独立的事件，这些事件可以借由epoll多次回调完成非阻塞的读写，多个读写事件共享同一个请求结构体，借助count字段和ngx_http_finalize_request函数管理引用计数，从而实现资源管理。
+- 202200819-overview：Nginx中比较关键的是连接对象。一个连接对象对应一对读写事件，读写事件各自有自己的回调函数来完成事件被触发时需要执行的操作。目前来看，一个连接对象**有且仅有一对**读写对象，Nginx的HTTP框架通过**分阶段改变连接读写对象的回调函数**来实现连接在不同阶段的不同操作。Nginx进程的ngx_cycle_t会保存一个动态数组，存储其监听对象。目前我把监听对象看作一种特殊的连接对象，所以listen->connection->read->handler负责accept的操作。
+- P292、P288~290：ngx_connection_t结构体
 
-  ```c
-  struct ngx_http_request_s {
-      ...
-      // 第一次业务上处理HTTP请求时（已接收完HTTP头部），
-      // HTTP框架提供的是ngx_http_process_request方法。
-      // 若该方法无法一次处理完该请求的全部业务，在归还控制权到epoll事件模块后，该请求再次被回调时，
-      // 将通过ngx_http_request_handler方法处理，
-      // 这个方法在对该请求可读事件就是调用read_event_handler来处理
-      ngx_http_event_handler_pt read_event_handler;
-      // HTTP框架在第二次及以后处理请求时，
-      // ngx_http_request_handler对该请求上的可写事件调用的回调处理方法
-      ngx_http_event_handler_pt write_event_handler;
-      ...
-      // 该请求下次应当执行的回调方法索引（用法见书P404~407）
-      ngx_int_t phase_handler;
-      // NGX_HTTP_CONTENT_PHASE提供给HTTP模块处理请求的方法，它指向HTTP模块的请求处理方法
-      ngx_http_handler_pt content_handler;
-      ...
-      // 当前请求的引用次数。当我们接收HTTP包体时，由于这也是一个异步调用，所以count上要加1
-      unsigned count:8;
-      ...
-  };
-  ```
+### 3.4.3 请求对象（参见http/ngx_http_request.h注释）
+
+- P391：ngx_http_request_t结构体。而一个请求会被包装成ngx_http_request_t结构体（书P391），其中的phase_handler用作phase engine结构体中handlers数组的下标。HTTP框架就是用这种方式把各个HTTP模块集成起来处理请求的。结构体中的read_event_handler和write_event_handler是针对异步处理机制设立的，Nginx针对请求的读写被划分成独立的事件，这些事件可以借由epoll多次回调完成非阻塞的读写，多个读写事件共享同一个请求结构体，借助count字段和ngx_http_finalize_request函数管理引用计数，从而实现资源管理。参见http/ngx_http_request.h注释
+
+### 3.4.4 读写事件对象（参见event/ngx_event.h注释）
 
 - P288：Nginx事件结构体
 
-  ```c
-  typedef void (*ngx_event_handler_pt)(ngx_event_t *ev);
-  // 事件结构体。因为Nginx认为一个连接自动对应一对读写事件，
-  // 所以事件不用创建，通过连接池一个空闲连接，就能拿到对应的事件
-  struct ngx_event_s {
-      // 事件相关的对象。通常指向ngx_connection_t连接对象。
-      // 开启文件异步IO时，它可能指向ngx_event_aio_t结构体
-      void *data;
-      ...
-      // 标志位，在epoll的ngx_event_accept(ngx_event_t *ev)中一次尽可能多的建立连接，
-      // 与multi_accept配置项对应
-      unsigned available:1;
-      // 事件发生时的处理方法，每个事件消费模块都会实现它（哪个环节被调用？）
-      ngx_event_handler_pt handler;
-      ...
-      // post事件会构成一个队列再统一处理，这个队列以next和prev作为链表指针（双向链表）
-      ngx_event_t  *next;
-      ngx_event_t **prev; // ngx_event_t** ??
-  };
-  ```
 
 
-## 3.5 事件模块（worker进程基本的事件处理循环是怎样的？）
+## 3.5 事件模块（以epoll为例）
 
-- <span style="color:red">问题13</span>：epoll是如何实现的？为什么相比select和poll（P308），epoll能处理百万级并发？：基于红黑树管理事件，利用设备驱动触发回调函数，将事件从红黑树中提出到一个双向链表，epoll_wait直接访问查询双向链表（轮训查询？epoll_wait如何实现阻塞的？）。
+### 3.5.1 问题1：事件结构体的active位、ready位、write位分别什么含义？
 
-  - 
+- ready：
+  - 设置ready=1：在ngx_epoll_process_events中，epoll_wait返回一个EPOLLIN|EPOLLOUT事件后，函数**设置该事件的ready=1**。
+  - 设置ready=1：在ngx_event_accept中，会根据deferred accept/rtsig/aio/iocp特性，**设置事件ready=1**。
+  - 设置ready=0：ngx_event_accept中，从监听对象accept连接前，会**设置”监听连接“的ready=0**。
+  - 设置ready=0：连接对象的recv和send函数（分别为ngx_unix_recv和ngx_unix_send），会直接调用recv和send系统调用，然后根据返回值**设置读写事件的ready=0**（epoll模块会在ngx_epoll_init中将全局的ngx_io设为ngx_os_io，ngx_os_io指定了连接的读写事件的recv和send函数分别为ngx_unix_recv和ngx_unix_send，这两个函数中会操作ready位）
+  - 询问ready==1：ngx_handle_write_event中，针对select/poll模块，active==1且ready==1时会将事件从事件驱动模块中删除
+  - 询问ready==1：ngx_http_read_request_header中，ready==1时会直接调用r->connection->recv去读取数据
+  - 询问ready==1：ngx_finalize_http_connection中，读事件回调ngx_http_lingering_close_handler会在ready==1时不断调用连接对象的recv。
+  - 询问ready==0：ngx_handle_read_event只有在ready==0且active==0时才会往epoll添加事件。
+  - 推断：ready应该是用于标记**事件对应的fd上能否读写，ready==0则一定无法读写，ready==1则可以尝试读写（但可能没有数据）**
+  - 源码：ngx_event.h中给ready位的注释是——"the ready event; in aio mode 0 means that no operation can be posted"
 
-- 问题14：什么是”惊群“？Nginx如何防止的？什么是“负载均衡”？“负载均衡”和“惊群”的关系？
+- active：
+  - 设置active=1：在ngx_epoll_add_event和ngx_epoll_add_connection中，会在成功调用epoll_ctl(.., EPOLL_CTL_ADD, ...)或epoll_ctl(..., EPOLL_CTL_MOD, ...)后**设置事件active=1**。（<span style="color:red">poll模块则在真正添加fd前设置，为什么？</span>）
+  - 设置active=0：在ngx_epoll_del_event和ngx_epoll_del_connection中，会在成功调用epoll_ctl(.., EPOLL_CTL_DEL, ...)后**设置事件active=0**。（poll模块则在真正删除fd前设置）
+  - 询问active==0：ngx_handle_read_event/ngx_handle_write_event中，当active==0且ready==0时才会往epoll添加或删除事件
+  - 询问active==1：ngx_epoll_add_event/ngx_epoll_del_event中，会询问连接对象的peer事件的active是否为1，来确定对当前事件的fd是采用EPOLL_CTL_ADD还是EPOLL_CTL_MOD。
+  - 询问active==1：ngx_epoll_process_event中，一个fd触发了EPOLLIN或EPOLLOUT时，还需要对应的rev->active==1或wev->active==1才会往下设置事件的ready位（<span style="color:red">有可能一个fd上注册了EPOLLIN但其读事件active==0吗？或这只是用于应对EPOLLERR和EPOLLHUP的情况？</span>）
+  - 推断：active用于标记**事件是否在事件驱动模块中监听**，active==1表示在，active==0表示不在
+  - 源码：ngx_event.h中给出active位的注释是——"the event was passed or **would be passed** to a kernel; in aio mode - operation was posted."（参考ngx_handle_read_event中eventports部分居然调用ngx_del_event）
 
-  - n个进程或线程注册了同一个fd上的读写事件，当fd上有一个事件到来时，n个进程或线程的epoll_wait都被唤醒，但只有1个进程能成功获取并处理这个事件，其余n-1个进程徒增了非阻塞系统调用的开销。
-  - 所以，worker进程如果想要在一次epoll_wait中接收新连接，需要某种“同步”机制达成多个进程处理新连接的同步（即大家都知道现在谁正在接受新连接）。Nginx通过文件锁实现进程间同步。在epoll_wait前先获得accept_mutex锁并往epoll中添加监听事件，而无法获得锁时仍然可以处理已建立连接的其他事件
-  - 解决了“惊群”，只是保证fd有事件到来时，**只有一个**进程被唤醒，但很可能**只有这一个**进程被唤醒。所以还需要引入建立连接的负载均衡。即一个worker进程不能保有太多的连接，或，保有一定量的连接后就禁止它接受新连接。
-  - accept_mutex锁配合ngx_accept_disabled变量能做一定的负载均衡。具体地，即worker进程若想在一次epoll_wait中接受新连接，还需要存活的连接数<=连接池可容纳连接总数的7/8。
-  - 理论上，Nginx应该在建立和销毁连接时对ngx_accept_disabled++或--，但因为连接可以复用、或者被异步地关闭，这样精确地维护会比较复杂。本质上，负载均衡只是让当前worker进程在“接受新连接”这个操作上静默一段事件，所以Nginx在worker进程尝试处理epoll_wait事件前就--ngx_accept_disabled，达到了静默的效果，代码也容易编写。
+- write：
+  - 设置write==1（vs全局搜索似乎只有这一项）：ngx_get_connection中对新连接的**写事件设置write=1**。
+  - 询问write==1：ngx_http_request_handler中判断事件ev->write==1则调用r->write_event_handler，否则调用r->read_event_handler
+  - 询问write==1：通过vs的全局引用搜索，看到select和upstream相关文件中用到ev->write，类似用来判断当前事件是否为写事件
+  - 推断：write用于标记事件是否为写事件，write==1表示为写事件，write==0表示为非写事件（有点像accept位作用）
+  - 书P288：write==1表示事件是可写的。通常情况下，它表示对应的TCP连接目前状态是可写的，也就是连接处于可以发送网络包的状态。（存疑：从连接结构体看到有”连接->事件“的联系，但从事件结构体并没看见”事件->连接“的联系？）
 
-- <span style="color:red">问题15</span>：定时器有什么用？：比如用于优雅退出？（P271：就是将连接中的close标志位设成1，再调用读事件的处理方法）
-
-- <span style="color:red">由P342引发的探索</span>：内核如何实现send和recv的？（加上内核如何实现strace，一起开个文档记录下吧？）
+### 3.5.2 <span style="color:red">问题12</span>：worker进程基本的事件处理循环是怎样的？（参见event/ngx_event.c注释和event/modules/ngx_epoll_module.c注释）
 
 - P312：默认情况下，Nginx是通过ET模式使用epoll的
-
 - P286~287：Nginx事件处理框架定义了9个事件驱动模块，在ngx_event_core_module模块（event类型模块的基础模块，类似HTTP模块的ngx_http_core_module。区分于核心模块ngx_events_module）的初始化过程中，Nginx会从这9个模块中选取1个作为Nginx进程的事件驱动模块。
-
-  ```c
-  // 事件模块通用接口，类似HTTP模块的通用接口ngx_http_module_t。
-  // Ngnix模块的基础接口中，void *ctx需要指向这些模块的实现了的通用接口
-  typedef struct {
-      ngx_str_t *name;
-      void *(*create_conf) (ngx_cycle_t *cycle);
-      char *(*init_conf) (ngx_cycle_t *cycle, void *conf);
-      // 
-      ngx_event_actions_t actions;
-  } ngx_event_module_t;
-  
-  typedef struct {
-      // 把1个感兴趣的事件添加到事件驱动机制中，一般调用Nginx封装的
-      // ngx_int_t ngx_handle_read_event(ngx_event_t *rev, ngx_uint_t flags)完成
-      ngx_int_t (*add)(ngx_event_t *ev, ngx_int_t event, ngx_uint_t flags);
-      // 把1个感兴趣的事件从事件驱动机制中移除，一般调用Nginx封装的
-      // ngx_int_t ngx_handle_write_event(ngx_event_t *wev, size_t lowat)完成
-      ngx_int_t (*del)(ngx_event_t *ev, ngx_int_t event, ngx_uint_t flags);
-      ...
-      // 在正常的工作循环中，将通过调用process_events方法来处理事件。它是图8-7处理、分发事件的核心
-      // （如ngx_epoll_module事件驱动模块中
-      // P316：ngx_epoll_process_events是实现了收集、分发事件的process_events接口的方法
-      // woker进程在后续的事件处理循环中，
-      // 会在核心的事件分发处理方法（ngx_process_events_and_timer）中通过宏调用（P331）
-      ngx_int_t (*process_events)(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags);
-      // 一些初始化和退出
-      ...
-  } ngx_event_actions_t;
-  ```
-
-- 问题16：ngx_events_module核心模块和ngx_event_core_module基础模块，到底谁在操作&定义ngx_event_module_t，从而最终让框架的ngx_event_module_t选用了epoll对应的接口？
-
-  - ngx_event_module_t属于各类型模块的上下文（由ngx_module_t的ctx成员指向），类似ngx_http_module_t，可以理解为**接口定义**，需要由处理模块自身实现，参考ngx_epoll_module模块的实现（书P313）。这里注意区分书P297说的：**ngx_event_module_t接口本身是由ngx_events_module核心模块定义的**。
-  - 所以，事件驱动机制的基础模块ngx_event_core_module也需要实现一个ngx_event_module_t作为其ngx_module_t定义中的ctx成员。回忆之前提到的，定义一个Nginx模块需要指定ctx和commands，commands代表了模块如何解析配置，这提供了模块间联动的可能。所以ngx_event_core_module的ctx只与自身有关，而commands中有一个“use”配置项，其中的ngx_event_use回调函数确定选择了选择哪一个事件模块作为事件驱动机制（书P303）。而根据ngx_event_core_module基础模块的的配置结构体ngx_event_conf_t（书P304）可以<span style="color:red">猜测</span>，**函数是通过保存ngx_epoll_module模块的ctx_index，让框架选用了epoll对应的接口**，后续便可以直接调用。
-  - 所以，提问其实有问题：框架有很多事件驱动模块，每个事件驱动模块都有实现了一个ngx_event_module_t接口。即ngx_event_core_module基础模块和ngx_epoll_module都实现了一个ngx_event_module_t接口（而ngx_events_module核心模块因为不属于事件驱动类模块，它实现的是名为ngx_core_module_t的接口，书P298）。但框架运行时采用的事件驱动模块（应该？）只有一个，这是由ngx_event_core_module在解析“use”配置项时确定的（具体细节需要看ngx_event_use是如何处理“use”配置项的）。
-
 - P270：worker进程事件处理和信号处理循环
+- worker进程的事件处理循环是通过worker工作循环不断地调用事件处理函数完成的
+- 事件处理函数主要完成4项工作（参见event/ngx_event.c注释）：调用1次事件处理机制（如epoll）的处理函数，统计处理机制处理本批次事件的耗时，然后处理定时事件和分发的延迟事件（如posted队列中的事件）
+- 处理机制（如epoll）的处理函数主要完成2项工作（参见event/modules/ngx_epoll_module.c注释）：调用1次epoll_wait(2)获取1批待处理事件，分发或直接处理。
 
-- P331~334：图8-7中，每个worker进程都在ngx_worker_process_cycle方法中循环处理时间。处理分发事件实际上就是调用的ngx_process_events_and_timers方法。......循环调用ngx_process_events_and_timers方法就是在处理所有的事件，这正是事件驱动机制的核心。顾名思义，ngx_process_events_and_timers方法既会处理普通的网络事件，也会处理定时器事件，在图9-7中，ngx_process_events_and_timers方法中的核心操作主要有以下3个：（1）调用所使用的事件驱动模块实现的process_events方法，处理网络事件；（2）处理两个post事件队列中的事件，实际上就是调用ngx_event_process_posted，分别传入监听连接读队列ngx_posted_accept_events和普通读写队列ngx_posted_events；（3）处理定时器事件，实际上就是调用ngx_event_expire_timers()方法。......注意，ngx_process_events_and_timers方法就是Nginx实际上处理Web服务的方法，所以业务的执行都是由它开始的。
+### 3.5.3 <span style="color:red">问题13</span>：epoll是如何实现的？为什么相比select和poll（P308），epoll能处理百万级并发？
 
-- <span style="color:red">问题17</span>：epoll事件驱动模块（ngx_epoll_module）的process_events如何借鉴一下？它怎么处理读写并“分发”事件的（什么是“分发”事件？）？active位有什么用？ready位有什么用？
+- 书上：基于红黑树管理事件，利用设备驱动触发回调函数，将事件从红黑树中提出到一个双向链表，epoll_wait直接访问查询双向链表（轮训查询？epoll_wait如何实现阻塞的？）。
 
-  - 书P315~318
-  - Nginx中，每个连接都有1个套接字fd、1个读事件对象指针和1个写事件对象指针。而每个事件都有1个所属连接的对象指针。所以执行ngx_epoll_add_event或ngx_epoll_del_event时，使用的是epoll_ctl向epoll对象添加或删除事件，添加或删除的文件描述符是事件对应的连接的fd、传入的((struct epoll_event) ev).data是**事件所属连接的对象指针**。**通过这个指针，可以当前阶段该连接的读写对象的描述**，执行相应的回调函数。
-  - 执行ngx_epoll_process_event时，主要就是调用epoll_wait并处理返回的事件列表。对一个返回的事件，主要是根据事件类型EPOLLIN或EPOLLOUT作相应处理（Nginx还可以通过返回事件的data字段拿到这个事件对应的连接对象，从而拿到连接对象的读写对象，读写对象的active位决定了ngx_epoll_process_events是否处理当前的EPOLLIN和EPOLLOUT事件。）。
-  - 什么是“分发”事件：对1次epoll_wait返回的1批事件，通过ngx_epoll_process_event传入的flags参数判断这批事件是否需要延后处理，若需要延后处理则加入ngx_posted_accept_events队列（新连接事件队列）或ngx_posted_events队列（普通读写事件队列）；若不需要延后处理，则直接调用通过data字段找到的连接对象对应的读写对象，回调读写对象中的handler来处理读写对象自己（rev->handler(rev)）。
-  - 所以“分发”事件就是根据flags位判断是否延后处理，可以理解为为事件处理“排序”。而处理读写则是直接回调套接字对应连接对象的读写事件对象的处理函数。
-  - 20220830-debug分析日志
+### 3.5.4 问题14：什么是”惊群“？Nginx如何防止的？什么是“负载均衡”？“负载均衡”和“惊群”的关系？
 
-- <span style="color:red">问题18</span>：一个连接对象的各种读写事件的回调函数在哪里实现（放到哪个事件驱动模块的文件中）、设置、加入epoll？（**可能除了监听连接和建立连接后第一次读取外，读写事件多数还是跟业务框架有关，所以由业务框架通过epoll的增删接口交互？见3.6.3**）
+- n个进程或线程注册了同一个fd上的读写事件，当fd上有一个事件到来时，n个进程或线程的epoll_wait都被唤醒，但只有1个进程能成功获取并处理这个事件，其余n-1个进程徒增了非阻塞系统调用的开销。
+- 所以，worker进程如果想要在一次epoll_wait中接收新连接，需要某种“同步”机制达成多个进程处理新连接的同步（即大家都知道现在谁正在接受新连接）。Nginx通过文件锁实现进程间同步。在epoll_wait前先获得accept_mutex锁并往epoll中添加监听事件，而无法获得锁时仍然可以处理已建立连接的其他事件
+- 解决了“惊群”，只是保证fd有事件到来时，**只有一个**进程被唤醒，但很可能**只有这一个**进程被唤醒。所以还需要引入建立连接的负载均衡。即一个worker进程不能保有太多的连接，或，保有一定量的连接后就禁止它接受新连接。
+- accept_mutex锁配合ngx_accept_disabled变量能做一定的负载均衡。具体地，即worker进程若想在一次epoll_wait中接受新连接，还需要存活的连接数<=连接池可容纳连接总数的7/8。
+- 理论上，Nginx应该在建立和销毁连接时对ngx_accept_disabled++或--，但因为连接可以复用、或者被异步地关闭，这样精确地维护会比较复杂。本质上，负载均衡只是让当前worker进程在“接受新连接”这个操作上静默一段事件，所以Nginx在worker进程尝试处理epoll_wait事件前就--ngx_accept_disabled，达到了静默的效果，代码也容易编写。
 
-  - （监听端口对应连接的读事件回调函数是ngx_event_accept，在ngx_event_core_module基本模块启动时被设置，<span style="color:red">并被加入epoll</span>）P306（12）在刚刚建立好的连接池中，为所有ngx_listening_t监听对象中的connection成员分配连接，同时对监听端口的读事件设置处理方法ngx_event_accept(ngx_event_t *ev)，也就是说，有新的连接事件时将调用ngx_event_accept(ngx_event_t *ev)方法建立新连接。P306（13）将监听对象连接的读事件添加到事件驱动模块中，这样，epoll等事件模块就开始检测监听服务，并开始向用户提供服务了。注意，打开accept_mutex锁后则不执行这一步......P325~326（7）ngx_listening_t结构体的handler回调方法就是当新的TCP连接刚刚建立完成时，在ngx_event_accept(ngx_event_t *ev)内调用的。
-  - （新连接的读事件的回调函数是ngx_http_init_request，在监听对象生成新连接后的回调函数ngx_http_init_connection方法中被设置，在ngx_event_accept中被加入epoll）P326（6）将这个新连接对应的读事件添加到epoll等事件驱动模块中，这样，在这个连接上如果接收到用户请求epoll_wait，就会收集到这个事件。
-  - （新连接的写事件回调函数是ngx_http_empty_handler，在监听对象生成新连接后的回调函数ngx_http_init_connection方法被中设置）
+### 3.5.5 <span style="color:red">问题15</span>：定时器有什么用？
 
-- P290~291：操作事件的方法。那么，怎么把事件添加到epoll等事件驱动模块中呢？需要调用9.1.1节中提到的ngx_event_action_t结构体中的add和del方法吗？答案是可以的，但Nginx为我们封装了两个简单的方法用于在事件驱动模块（应该可以说是：这个是事件驱动模块的对其他类型模块的接口？）中添加或移除事件——ngx_handle_read_event和ngx_handle_write_event，它们还是做了许多通用性的工作的。......一般在向epoll中添加可读或可写事件时，都是用这两个接口。对于ngx_epoll_module模块实现的接口方法，最好不要直接调用，它们都与具体的事件驱动机制强相关。
+- 比如用于优雅退出？（P271：就是将连接中的close标志位设成1，再调用读事件的处理方法）
 
-  ```c
-  // 将读事件添加到事件驱动模块中，该事件对应的TCP连接上出现可读事件，该事件的handler方法会被回调
-  ngx_int_t ngx_handle_read_event(ngx_event_t *rev, ngx_uint_t flags);
-  // 将写事件添加到事件驱动模块中，该事件对应的TCP连接上出现可写事件，该事件的handler方法会被回调
-  ngx_int_t ngx_handle_write_event(ngx_event_t *wev, size_t lowat);
-  ```
+### 3.5.6 <span style="color:red">问题16</span>：核心模块ngx_events_module和基础模块ngx_event_core_module，到底谁在操作&定义结构体ngx_event_module_t，从而最终让框架选用了epoll模块？
 
-## 3.6 HTTP请求处理（业务框架如何与事件处理解耦并配合？）
+- ngx_event_module_t属于各类型模块的上下文（由ngx_module_t的ctx成员指向），类似ngx_http_module_t，可以理解为**接口定义**，需要由处理模块自身实现，参考ngx_epoll_module模块的实现（书P313）。这里注意区分书P297说的：**ngx_event_module_t接口本身是由ngx_events_module核心模块定义的**。
+- 所以，事件驱动机制的基础模块ngx_event_core_module也需要实现一个ngx_event_module_t作为其ngx_module_t定义中的ctx成员。回忆之前提到的，定义一个Nginx模块需要指定ctx和commands，commands代表了模块如何解析配置，这提供了模块间联动的可能。所以ngx_event_core_module的ctx只与自身有关，而commands中有一个“use”配置项，其中的ngx_event_use回调函数确定选择了选择哪一个事件模块作为事件驱动机制（书P303）。而根据ngx_event_core_module基础模块的的配置结构体ngx_event_conf_t（书P304）可以<span style="color:red">猜测</span>，**函数是通过保存ngx_epoll_module模块的ctx_index，让框架选用了epoll对应的接口**，后续便可以直接调用。
+- 所以，提问其实有问题：框架有很多事件驱动模块，每个事件驱动模块都有实现了一个ngx_event_module_t接口。即基础模块ngx_event_core_module和epoll机制模块ngx_epoll_module都实现了一个ngx_event_module_t接口（而ngx_events_module核心模块因为不属于事件驱动类模块，它实现的是名为ngx_core_module_t的接口，书P298）。
+- 但框架运行时采用的事件驱动模块（应该？）只有一个，这是由ngx_event_core_module在解析“use”配置项时确定的（具体细节需要看ngx_event_use是如何处理“use”配置项的）。
 
-### 3.6.1 初始化：自定义的模块处理函数（handler）是如何注册到处理流程的？
+### 3.5.7 <span style="color:red">问题17</span>：epoll模块为什么要分发事件？怎么分发事件？
 
-- 全局的ngx_http_core_main_conf_t保存ngx_http_phase_engine_t，这个phase engine是所有HTTP模块可以同时处理用户请求的关键！phase engine结构体保存了ngx_http_phase_handler_t数组（书P375），这个数组保存了请求将经历的所有处理方法！
+- 书P315~318
+- Nginx中，每个连接都有1个套接字fd、1个读事件对象指针和1个写事件对象指针。而每个事件都有1个所属连接的对象指针。所以执行ngx_epoll_add_event或ngx_epoll_del_event时，使用的是epoll_ctl向epoll对象添加或删除事件，添加或删除的文件描述符是事件对应的连接的fd、传入的((struct epoll_event) ev).data是**事件所属连接的对象指针**。**通过这个指针，可以当前阶段该连接的读写对象的描述**，执行相应的回调函数。
+- 执行ngx_epoll_process_event时，主要就是调用epoll_wait并处理返回的事件列表。对一个返回的事件，主要是根据事件类型EPOLLIN或EPOLLOUT作相应处理（Nginx还可以通过返回事件的data字段拿到这个事件对应的连接对象，从而拿到连接对象的读写对象，读写对象的active位决定了ngx_epoll_process_events是否处理当前的EPOLLIN和EPOLLOUT事件。）。
+- 什么是“分发”事件：对1次epoll_wait返回的1批事件，通过ngx_epoll_process_event传入的flags参数判断这批事件是否需要延后处理，若需要延后处理则加入ngx_posted_accept_events队列（新连接事件队列）或ngx_posted_events队列（普通读写事件队列）；若不需要延后处理，则直接调用通过data字段找到的连接对象对应的读写对象，回调读写对象中的handler来处理读写对象自己（rev->handler(rev)）。
+- 所以“分发”事件就是根据flags位判断是否延后处理，可以理解为为事件处理“排序”。而处理读写则是直接回调套接字对应连接对象的读写事件对象的处理函数。
+- 20220830-debug分析日志
 
-  ```c
-  typedef struct ngx_http_phase_handler_s ngx_http_phase_handler_t;
-  
-  typedef ngx_int_t (*ngx_http_handler_pt)
-      (ngx_http_request_t *r);
-  typedef ngx_int_t (*ngx_http_phase_handler_pt) 
-      (ngx_http_request_t *r, ngx_http_phase_handler_t *ph);
-  
-  // 一个处理方法，包含checker函数和handler函数
-  struct ngx_http_phase_handler_s {
-      // checker方法由ngx_http_core_module核心模块实现，普通的HTTP模块无法定义。
-      // HTTP框架会对应阶段先调用checker方法，仅在checker中调用handler方法
-      ngx_http_phase_handler_pt checker;
-      // 普通HTTP模块只能通过定义handler介入HTTP处理的11个阶段
-      ngx_http_handler_pt handler;
-      // 通常表示下一个处理阶段中的第1个ngx_http_phase_handler_t处理方法。
-      ngx_uint_t next;
-  };
-  
-  typedef struct {
-      // （1）根据书P404~407关于phase_handler的描述，推测是所有方法的链式数组，
-      //      即区别于phases[NGX_HTTP_LOG_PHASE + 1]的分阶段数组。
-      // （2）根据http/ngx_http.c:ngx_http_init_phase_handlers方法，
-      //      phase_engine.handlers指向一个ngx_http_phase_handler_t类型的链式数组（从内存中“连续分配”），
-      //      phase_engine.handlers[i].next一般指向下一处理阶段的第1个处理方法在该链式数组中的下标。
-      ngx_http_phase_handler_t *handlers;
-      ...
-  } ngx_http_phase_engine_t;
-  
-  // 各个HTTP模块添加到同一个处理阶段的处理方法，用动态数组保存
-  typedef struct { ngx_array_t handlers; } ngx_http_phase_t;
-  typedef struct {
-      ngx_http_phase_engine_t phase_engine;
-      // 定义HTTP模块时，可以在postconfiguration方法中，
-      // 将自定义方法添加到各阶段的handlers动态数组（书P375，书P384）。
-      // phases数组后续被框架用来初始化phase_engine.handlers数组（书P384），
-      // 由此自定义模块就能介入HTTP处理的11个阶段了。
-      //（NGX_HTTP_CONTENT_PHASE提供了另一种方法，书P381）
-      ngx_http_phase_t phases[NGX_HTTP_LOG_PHASE + 1];
-      ...
-  } ngx_http_core_main_conf_t;
-  ```
+### 3.5.8 问题18：有关业务和事件驱动解耦联动的机制，HTTP的读写事件的回调及添加删除是如何借助epoll完成的？
 
-- 而一个请求会被包装成ngx_http_request_t结构体（书P391），其中的phase_handler用作phase engine结构体中handlers数组的下标。HTTP框架就是用这种方式把各个HTTP模块集成起来处理请求的。
+- 可能除了监听连接和建立连接后第一次读取外，读写事件多数还是跟业务框架有关。
+- 其实应该就是通过事件驱动模块提供的对外接口，ngx_handle_read_event和ngx_handle_write_event实现交互的，有点像系统调用。
 
-- 介入方式：HTTP框架有一个全局的配置结构体（ngx_http_core_main_conf_t），这个配置结构体有一个二维数组，保存着11个HTTP处理阶段所有HTTP模块的自定义处理方法（一个HTTP模块在同一个阶段可以插入多个处理方法）。所以自定义模块只需要在适当时候往这个二维数组插入方法即可。因为完成配置读取后，框架会调用所有模块的postconfiguration方法，所以可以在postconfiguration中向框架注册自定义方法。我们在自定义的ngx_http_module_t结构体中，定义一个postconfiguration方法，在该方法中往全局配置结构体的阶段处理方法二维数组（phases[PHASE_ID].handlers动态数组，PHASE_ID代表11个阶段的阶段索引）中添加处理方法即可。HTTP
+### 3.5.9 问题19：Nginx使用ET模式epoll处理连接的读事件，如何保证再下一次添加完读事件时候前recv是返回EAGAIN的（即判断recv返回EAGAIN到添加新事件的间隙中，fd有了新数据）？
 
-### 3.6.2 业务和事件驱动解耦联动的机制：HTTP的读写事件是如何借助epoll完成（包括添加和删除事件）的？（即epoll如何与HTTP业务框架解耦并联动？）
+- fd的EPOLLIN一直在epoll中，只是handler改变了。handler改变则是上层协议决定的了。
+- 比如HTTP协议规定，解析完请求行就是解析请求头，本次recv的数据已经包含整个请求行，此时从协议的语义上来说，回调函数就可以更改为处理请求头的回调了。
+- 因此处理请求头的回调函数应该实现从接受缓冲+新EPOLLIN数据解析请求头的功能！采用非阻塞模式编程，接收缓存是必须的，异步回调函数就应该有同时处理 接收缓冲+EPOLLIN新数据 的功能！
+- 事实上，利用事件的ready位能在一次epoll_wait返回后，模拟触发多个回调函数的过程。当然，回调函数中须要把流程串起来，比如解析完HTTP请求行，就把连接读事件的回调函数改为解析HTTP请求头的函数（记为process_headers），然后检查发现ready==1则调用一次process_headers。
 
-或许能回答问题18：一个连接对象的各种读写事件的回调函数在哪里实现（放到哪个事件驱动模块的文件中）、设置、加入epoll。可能除了监听连接和建立连接后第一次读取外，读写事件多数还是跟业务框架有关。
-
-其实应该就是通过事件驱动模块提供的对外接口，ngx_handle_read_event和ngx_handle_write_event实现交互的，有点像系统调用。
+### 3.5.10 <span style="color:red">问题20</span>：epoll中ET和LT模式的accept有什么区别？为什么很多网络库如libevent、boost.asio、muduo都用LT模式，而Nginx用ET模式？哪种方式效率高？
 
 
 
-#### 3.6.2.1 问题19：Nginx使用ET模式epoll处理连接的读事件，如何保证再下一次添加完读事件时候前recv是返回EAGAIN的（即判断recv返回EAGAIN到添加新事件的间隙中，fd有了新数据）？
+### 3.5.11 <span style="color:red">问题21</span>：Nginx是否默认使用了EPOLLONESHOT？不然怎么书上说recv返回EAGAIN时都要再次添加读事件？
 
-- fd的EPOLLIN一直在epoll中，只是handler改变了。handler改变则是上层协议决定的了（比如HTTP协议规定，解析完请求行就是解析请求头，本次recv的数据已经包含整个请求行，此时回调函数可以更改为处理请求头的回调，处理请求头的回调函数应该实现从接受缓冲+新EPOLLIN数据解析请求头的功能！）
-- 采用非阻塞模式编程，接收缓存是必须的，异步回调函数就应该有同时处理 接收缓冲+EPOLLIN新数据 的功能！
-
-#### 3.6.2.2 <span style="color:red">问题20</span>：epoll中ET和LT模式的accept有什么区别？为什么很多网络库如libevent、boost.asio、muduo都用LT模式，而Nginx用ET模式？哪种方式效率高？
-
-
-
-#### 3.6.2.3 <span style="color:red">问题21</span>：Nginx是否默认使用了EPOLLONESHOT？不然怎么书上说recv返回EAGAIN时都要再次添加读事件？
-
-- 事件的ready、active、write位的作用（以使用epoll事件驱动为例）：
-  - ready：
-    - 设置ready=1：在ngx_epoll_process_events中，epoll_wait返回一个EPOLLIN|EPOLLOUT事件后，函数**设置该事件的ready=1**。
-    - 设置ready=1：在ngx_event_accept中，会根据deferred accept/rtsig/aio/iocp特性，**设置事件ready=1**。
-    - 设置ready=0：ngx_event_accept中，从监听对象accept连接前，会**设置”监听连接“的ready=0**。
-    - 设置ready=0：连接对象的recv和send函数（分别为ngx_unix_recv和ngx_unix_send），会直接调用recv和send系统调用，然后根据返回值**设置读写事件的ready=0**（epoll模块会在ngx_epoll_init中将全局的ngx_io设为ngx_os_io，ngx_os_io指定了连接的读写事件的recv和send函数分别为ngx_unix_recv和ngx_unix_send，这两个函数中会操作ready位）
-    - 询问ready==1：ngx_handle_write_event中，针对select/poll模块，active==1且ready==1时会将事件从事件驱动模块中删除
-    - 询问ready==1：ngx_http_read_request_header中，ready==1时会直接调用r->connection->recv去读取数据
-    - 询问ready==1：ngx_finalize_http_connection中，读事件回调ngx_http_lingering_close_handler会在ready==1时不断调用连接对象的recv。
-    - 询问ready==0：ngx_handle_read_event只有在ready==0且active==0时才会往epoll添加事件。
-    - 推断：ready应该是用于标记**事件对应的fd上能否读写，ready==0则一定无法读写，ready==1则可以尝试读写（但可能没有数据）**
-    - 源码：ngx_event.h中给ready位的注释是——"the ready event; in aio mode 0 means that no operation can be posted"
-
-  - active：
-    - 设置active=1：在ngx_epoll_add_event和ngx_epoll_add_connection中，会在成功调用epoll_ctl(.., EPOLL_CTL_ADD, ...)或epoll_ctl(..., EPOLL_CTL_MOD, ...)后**设置事件active=1**。（<span style="color:red">poll模块则在真正添加fd前设置，为什么？</span>）
-    - 设置active=0：在ngx_epoll_del_event和ngx_epoll_del_connection中，会在成功调用epoll_ctl(.., EPOLL_CTL_DEL, ...)后**设置事件active=0**。（poll模块则在真正删除fd前设置）
-    - 询问active==0：ngx_handle_read_event/ngx_handle_write_event中，当active==0且ready==0时才会往epoll添加或删除事件
-    - 询问active==1：ngx_epoll_add_event/ngx_epoll_del_event中，会询问连接对象的peer事件的active是否为1，来确定对当前事件的fd是采用EPOLL_CTL_ADD还是EPOLL_CTL_MOD。
-    - 询问active==1：ngx_epoll_process_event中，一个fd触发了EPOLLIN或EPOLLOUT时，还需要对应的rev->active==1或wev->active==1才会往下设置事件的ready位（<span style="color:red">有可能一个fd上注册了EPOLLIN但其读事件active==0吗？或这只是用于应对EPOLLERR和EPOLLHUP的情况？</span>）
-    - 推断：active用于标记**事件是否在事件驱动模块中监听**，active==1表示在，active==0表示不在
-    - 源码：ngx_event.h中给出active位的注释是——"the event was passed or **would be passed** to a kernel; in aio mode - operation was posted."（参考ngx_handle_read_event中eventports部分居然调用ngx_del_event）
-
-  - write：
-    - 设置write==1（vs全局搜索似乎只有这一项）：ngx_get_connection中对新连接的**写事件设置write=1**。
-    - 询问write==1：ngx_http_request_handler中判断事件ev->write==1则调用r->write_event_handler，否则调用r->read_event_handler
-    - 询问write==1：通过vs的全局引用搜索，看到select和upstream相关文件中用到ev->write，类似用来判断当前事件是否为写事件
-    - 推断：write用于标记事件是否为写事件，write==1表示为写事件，write==0表示为非写事件（有点像accept位作用）
-    - 书P288：write==1表示事件是可写的。通常情况下，它表示对应的TCP连接目前状态是可写的，也就是连接处于可以发送网络包的状态。（存疑：从连接结构体看到有”连接->事件“的联系，但从事件结构体并没看见”事件->连接“的联系？）
 - HTTP接受请求的过程中，ngx_http_init_connection、ngx_http_read_request_header和ngx_http_request_handler似乎出现了往epoll多次添加事件的操作
   - ngx_http_init_connection(ngx_connection_t*)：这是新连接的第一个HTTP相关处理函数，参数对应连接的读事件的回调函数应该在ngx_event_accept中被设置，但ngx_event_accept中只针对deferred accept/rtsig/aio/iocp特性设置了读写事件的ready位（如init_connection函数中Nginx原有注释所言！），并没有设置回调。所以对epoll而言，此处调用的ngx_handle_read_event实际上是**新连接读事件第一次被加入epoll**。
   - ngx_http_read_request_header(ngx_http_request_t*)：参照源码（http/ngx_http_request.c），当r->connection->read->ready==1时，该函数会尝试调用一次r->connection->recv来读取数据，若读取返回NGX_AGAIN（当读事件ready==1，调用一次recv是否可能返回NGX_EAGAIN？（有可能。ET模式中，若多个回调函数流式地处理，回调函数1刚好读完，并将回调改为下一个处理函数时，需要调用一次下一个回调函数。这时下一个回调函数再recv，可能返回EAGAIN。但看Nginx中对连接读写函数c->recv的封装，c->recv会及时在读取到EAGAIN时将事件的ready位置0。所以这种情况在Nginx中应该不会出现），则会调用ngx_handle_read_event往epoll添加读事件。但是参照源码（event/ngx_event.c）会发现不论哪种事件驱动模块，只有事件active和ready位同时==0时，事件驱动模块的ngx_add_event才会被调用。而且ngx_handle_read_event根据传入的flags不同，还可能调用ngx_del_event。所以书上P290~291的说法不全对。ngx_handle_read_event其实是根据flags处理事件驱动中的读事件，默认flags情况下会**尝试**往事件驱动模块添加读事件（当事件已经在里面，即active==1；或事件已经准备好，即ready==1时，都不应该再次添加。前者是因为不需要，后者是因为既然事件已经准备好，则应该由事件回调函数及时处理，至少ngx_http_read_request_header里体现了这点）
@@ -598,7 +342,19 @@ make install
 
 
 
-### 3.6.3 执行流程：自定义模块的handler（如书P102的ngx_http_mytest_handler）包含了处理请求、发送响应的完整过程，它是怎么被执行的？如果handler中有发送HTTP响应的处理，框架如何保证一个请求走完11个请求处理阶段？
+
+## 3.6 多模块处理HTTP请求
+
+### 3.6.1 初始化：自定义的模块处理函数（handler）是如何注册到处理流程的？
+
+- 全局的ngx_http_core_main_conf_t保存ngx_http_phase_engine_t，这个phase engine是所有HTTP模块可以同时处理用户请求的关键！phase engine结构体保存了ngx_http_phase_handler_t数组（书P375），这个数组保存了请求将经历的所有处理方法！
+
+- 而一个请求会被包装成ngx_http_request_t结构体（书P391），其中的phase_handler用作phase engine结构体中handlers数组的下标。HTTP框架就是用这种方式把各个HTTP模块集成起来处理请求的。
+
+- 介入方式：HTTP框架有一个全局的配置结构体（ngx_http_core_main_conf_t），这个配置结构体有一个二维数组，保存着11个HTTP处理阶段所有HTTP模块的自定义处理方法（一个HTTP模块在同一个阶段可以插入多个处理方法）。所以自定义模块只需要在适当时候往这个二维数组插入方法即可。因为完成配置读取后，框架会调用所有模块的postconfiguration方法，所以可以在postconfiguration中向框架注册自定义方法。我们在自定义的ngx_http_module_t结构体中，定义一个postconfiguration方法，在该方法中往全局配置结构体的阶段处理方法二维数组（phases[PHASE_ID].handlers动态数组，PHASE_ID代表11个阶段的阶段索引）中添加处理方法即可。
+
+
+### 3.6.2 执行流程：一个新连接从建立、接收请求头、异步接收包体、处理请求、异步发送包体、释放的过程时怎样的？
 
 
 
@@ -606,7 +362,7 @@ make install
 
 
 
-#### 3.6.3.0 监听对象初始化连接及连接的回调
+#### （1） 监听对象初始化连接及连接的回调
 
 - 处理新连接的入口：监听-->ngx_event_accept-->ngx_http_init_connection。
   - “监听连接”到达新的读事件时，调用“监听连接”读回调函数ngx_event_accept，**ngx_event_accept中会从监听端口accept并建立新连接，紧接着调用ls->handler，由此新连接的处理进入了init_connection**。
@@ -778,7 +534,7 @@ make install
 
 
 
-#### 3.6.3.1 处理请求的11个阶段（假设用epoll事件驱动模块）
+#### （2） 处理请求的11个阶段（假设用epoll事件驱动模块）
 
 - 20220819-overview、20220828-RTFSC(no gdb，以下函数名均省略`ngx_http_`前缀)
   - 1、新连接第一个处理函数init_connection(**ngx_connection_t *c**)（仅1次）：设置连接的读事件rev->handler=init_request，写事件c->write->handler=empty_handler，若rev->ready为1，则**返回并在此前调用**rev->handler(rev)，否则**往epoll添加当前读事件**。
@@ -834,7 +590,7 @@ make install
 
 
 
-#### 3.6.3.2 HTTP框架为模块开发提供接口：异步接收包体
+#### （3） HTTP框架为模块开发提供接口：异步接收包体
 
 - overview：
   - <span style="color:red">是否会修改请求的读回调函数？如果修改了，是否需要将读回调设置回block_reading？在哪里设置的？</span>
@@ -860,7 +616,7 @@ make install
 
 
 
-#### 3.6.3.3 HTTP框架为模块开发提供的接口：异步发送响应
+#### （4） HTTP框架为模块开发提供的接口：异步发送响应
 
 - overview：
 
@@ -954,4 +710,8 @@ make install
   finalize_request会尝试finalize_connection，finalize_connection才真正地尝试用close释放request（进而释放connection资源）。但close不一定会释放资源（因为引用计数&keepalive特性），free才会释放资源。
 
 - P435：无论是ngx_http_send_header还是ngx_http_output_filter方法，它们在调用时一般都无法发送全部的响应，剩下的响应内容都得靠ngx_http_writer方法来发送。（通过ngx_http_send_header和ngx_http_output_filter响应请求，但实际上它们都会在无法一次性发送时调用ngx_http_writer异步完成剩余的发送。）
+
+
+
+### 3.6.3 如果多个HTTP模块的handler中都对处理的请求发送了HTTP响应，框架如何保证发送HTTP的顺序是正确的？
 
