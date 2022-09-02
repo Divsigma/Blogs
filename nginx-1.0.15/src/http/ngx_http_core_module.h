@@ -122,14 +122,28 @@ typedef struct ngx_http_phase_handler_s  ngx_http_phase_handler_t;
 typedef ngx_int_t (*ngx_http_phase_handler_pt)(ngx_http_request_t *r,
     ngx_http_phase_handler_t *ph);
 
+// 一个HTTP模块可以自定义的处理方法
 struct ngx_http_phase_handler_s {
+    // 一个HTTP模块可以通过介入HTTP框架的11个阶段（即phase）来处理请求，
+    // HTTP框架的11个阶段都有各自的处理函数入口（即phase handler），即函数checker，
+    // 如NGX_HTTP_CONTENT_PHASE的checker是
+    // ngx_int_t ngx_http_core_content_phase(ngx_http_request_t* r, ngx_http_phase_handler_t* ph)。
+    // 而真正的模块处理方法（即handler）须要通过模块所属阶段的checker来调用
     ngx_http_phase_handler_pt  checker;
+    // 真正执行模块自定义处理的方法
     ngx_http_handler_pt        handler;
+    // HTTP模块的所有处理方法被保存到一个全局数组中，
+    // 即下面的ngx_http_phase_engine_t phase_engine，
+    // next通常表示下一阶段（phase）的第一个ngx_http_phase_handler_s在全局数组中的下标
     ngx_uint_t                 next;
 };
 
 
 typedef struct {
+    // 根据函数ngx_http_init_phase_handlers的流程，
+    // handlers构成了一个链式数组，该数组的元素都有一个next指针，
+    // （数组元素从内存中“连续分配”，分配后返回了首元素指针，所以这里只保存一个指针）
+    // next指针指向下一个HTTP处理阶段的第一个处理方法在链式数组中的下标
     ngx_http_phase_handler_t  *handlers;
     ngx_uint_t                 server_rewrite_index;
     ngx_uint_t                 location_rewrite_index;
@@ -144,6 +158,9 @@ typedef struct {
 typedef struct {
     ngx_array_t                servers;         /* ngx_http_core_srv_conf_t */
 
+    // 各模块处理HTTP请求时真正用到的“处理引擎”，
+    // 它本质上用链式数组保存了所有HTTP模块的处理方法，
+    // 如函数ngx_http_init_phase_handlers中通过phase_engine.handlers[i]操作HTTP模块的处理方法
     ngx_http_phase_engine_t    phase_engine;
 
     ngx_hash_t                 headers_in_hash;
@@ -165,6 +182,8 @@ typedef struct {
 
     ngx_uint_t                 try_files;       /* unsigned  try_files:1 */
 
+    // 在定义模块的阶段，各模块将自己的处理方法分阶段地添加到所属阶段的动态数组，
+    // 这11个动态数组仅用来初始化所有处理方法的链式数组ngx_http_phase_engine_t phase_engine
     ngx_http_phase_t           phases[NGX_HTTP_LOG_PHASE + 1];
 } ngx_http_core_main_conf_t;
 

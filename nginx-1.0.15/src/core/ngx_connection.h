@@ -30,6 +30,10 @@ struct ngx_listening_s {
     int                 sndbuf;
 
     /* handler of accepted connection */
+    // 如，从监听对象建立新的HTTP连接需要经过accept和将初始化新连接的操作，
+    // 该handler就是负责accept后初始化新连接，
+    // 在HTTP框架中，该handler = ngx_http_init_connection，
+    // 会负责申请内存、将新连接读写事件加入epoll等。
     ngx_connection_handler_pt   handler;
 
     void               *servers;  /* array of ngx_http_in_addr_t, for example */
@@ -44,6 +48,9 @@ struct ngx_listening_s {
     ngx_msec_t          post_accept_timeout;
 
     ngx_listening_t    *previous;
+    // 当前监听对象对应的连接结构体，监听对象需要使用该连接结构体中的读写事件，
+    // 如设置结构体ngx_connection_t中的读事件回调为函数void ngx_event_accept(ngx_event_t*)，
+    // 以完成从全连接队列接收新连接（在内核创建fd）的工作
     ngx_connection_t   *connection;
 
     unsigned            open:1;
@@ -103,19 +110,36 @@ typedef enum {
 #define NGX_LOWLEVEL_BUFFERED  0x0f
 #define NGX_SSL_BUFFERED       0x01
 
-
+// 被动连接
 struct ngx_connection_s {
+    // （1）未使用时，指向连接池中下一个空闲连接（相当于next指针）；
+    // （2）新连接建立后，指向Nginx模块所需的上下文，
+    //      如HTTP框架中则指向结构体ngx_http_request_t，
+    //      所以处理新HTTP连接的回调函数ngx_http_init_request中，
+    //      会有类似c->data = c->data->request的操作，
+    //      就是将next指针“转为”上下文指针
     void               *data;
+    // 连接对应的读事件，指向结构体ngx_cycle_t中数组read_events的某个元素（即空间预分配了）
     ngx_event_t        *read;
+    // 连接对应的写事件，指向结构体ngx_cycle_t中数组write_events的某个元素
     ngx_event_t        *write;
 
     ngx_socket_t        fd;
 
+    // 接收网络字符流的方法，该方法中一般会调用recv(2)并重置读事件的ready位为0，
+    // 如函数ssize_t ngx_unix_recv(ngx_connection_t *c, u_char *buf, size_t size)
     ngx_recv_pt         recv;
+    // 直接发送网络字符流的方法，该方法中一般会调用send(2)并重置写事件的ready位为0，
+    // 如函数ssize_t ngx_unix_send(ngx_connection_t *c, u_char *buf, size_t size)
     ngx_send_pt         send;
+    // 直接批量接收网络字符流的方法，一般用于异步接收请求包体，该方法一般会调用readv(2)，
+    // 如函数ssize_t ngx_readv_chain(ngx_connection_t *c, ngx_chain_t *chain)
     ngx_recv_chain_pt   recv_chain;
+    // 直接批量发送网络字符流的方法，一般用于异步发送响应，该方法一般会调用writev(2)，
+    // 如函数ngx_chain_t* ngx_writev_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
     ngx_send_chain_pt   send_chain;
 
+    // 新连接对象都由某个监听对象产生
     ngx_listening_t    *listening;
 
     off_t               sent;

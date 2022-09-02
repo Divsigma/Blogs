@@ -344,6 +344,7 @@ typedef ngx_int_t (*ngx_http_handler_pt)(ngx_http_request_t *r);
 typedef void (*ngx_http_event_handler_pt)(ngx_http_request_t *r);
 
 
+// HTTP请求
 struct ngx_http_request_s {
     uint32_t                          signature;         /* "HTTP" */
 
@@ -354,7 +355,12 @@ struct ngx_http_request_s {
     void                            **srv_conf;
     void                            **loc_conf;
 
+    // 针对已接收的HTTP请求的读回调函数（即已接收完HTTP请求行和请求头），
+    // 因为接收完一个HTTP请求后，可以开始处理请求，
+    // 设置请求的读回调可以将请求处理划分为多个独立事件（如，异步接收包体）
+    // 或多个处理流程（如，给多个HTTP模块处理），降低处理流程的耦合性
     ngx_http_event_handler_pt         read_event_handler;
+    // 针对已接受的HTTP请求的写回调函数（即已接收完HTTP请求行和请求头）
     ngx_http_event_handler_pt         write_event_handler;
 
 #if (NGX_HTTP_CACHE)
@@ -398,6 +404,9 @@ struct ngx_http_request_s {
 
     ngx_http_virtual_names_t         *virtual_names;
 
+    // HTTP模块的处理函数handler会被添加到全局的处理函数数组中，
+    // 该数组保存着所有HTTP模块的处理函数，每个函数都有一个下标，
+    // 请求记录的模块处理函数下标phase_handler指明了该请求希望被哪个处理函数处理
     ngx_int_t                         phase_handler;
     ngx_http_handler_pt               content_handler;
     ngx_uint_t                        access_code;
@@ -426,6 +435,8 @@ struct ngx_http_request_s {
     ngx_http_cleanup_t               *cleanup;
 
     unsigned                          subrequests:8;
+    // 请求的引用计数，异步操作中很重要，
+    // 错误地管理引用计数可能导致内存泄漏或访问越界
     unsigned                          count:8;
     unsigned                          blocked:8;
 
