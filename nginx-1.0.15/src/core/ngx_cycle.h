@@ -34,8 +34,17 @@ struct ngx_shm_zone_s {
 };
 
 
+// Nginx核心代码框架一直围绕该结构体展开，每个进程都有一个ngx_cycle_s结构体
+// 区别于进程的ngx_process_t结构体，后者仅有进程状态信息（无资源信息）
 struct ngx_cycle_s {
+    // 所有模块配置结构体的指针（先分类，再分具体模块）
+    // conf_ctx指向一个指针数组A，A的每个元素都指向一个指针数组Ai，
+    // Ai的每个元素都指向模块对应的配置结构体，
+    // （A将Nginx所有配置结构体按类别分类，Ai为某一类入口）
+    // 如event类型模块，(*conf_ctx[module.index])[module.ctx_index]
+    // 如HTTP类型模块，(*conf_ctx[module.index]).main_conf[module.ctx_index]
     void                  ****conf_ctx;
+    // 内存池
     ngx_pool_t               *pool;
 
     ngx_log_t                *log;
@@ -52,9 +61,15 @@ struct ngx_cycle_s {
     ngx_list_t                open_files;
     ngx_list_t                shared_memory;
 
+    // 当前进程中，
+    // connection_n == 连接对象个数 == 读写事件个数
     ngx_uint_t                connection_n;
     ngx_uint_t                files_n;
 
+    // 下面三个指针下标对应，分别保存当前进程中，
+    // 所有连接对象及与其对应的连接读写事件
+    // 所以，一个会产生读写事件的fd都会对应一个ngx_connection_t
+    // （所以Nginx似乎把监听对象看作特殊的连接了？）
     ngx_connection_t         *connections;
     ngx_event_t              *read_events;
     ngx_event_t              *write_events;

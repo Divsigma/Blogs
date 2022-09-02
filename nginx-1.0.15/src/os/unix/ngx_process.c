@@ -82,6 +82,8 @@ ngx_signal_t  signals[] = {
 };
 
 
+// master进程用于启动一个子进程的方法，
+// 其中包括调用fork(2)、对子进程结构体初始化
 ngx_pid_t
 ngx_spawn_process(ngx_cycle_t *cycle, ngx_spawn_proc_pt proc, void *data,
     char *name, ngx_int_t respawn)
