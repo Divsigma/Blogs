@@ -293,6 +293,8 @@ ngx_epoll_init(ngx_cycle_t *cycle, ngx_msec_t timer)
     epcf = ngx_event_get_conf(cycle->conf_ctx, ngx_epoll_module);
 
     if (ep == -1) {
+        // 在许多Linux内核版本中，epoll_create(2)不处理size参数，
+        // 该参数不代表epoll能处理的最大事件个数
         ep = epoll_create(cycle->connection_n / 2);
 
         if (ep == -1) {
@@ -387,6 +389,7 @@ ngx_epoll_add_event(ngx_event_t *ev, ngx_int_t event, ngx_uint_t flags)
 
     c = ev->data;
 
+    // epoll机制中，event为EPOLLIN或EPOLLOUT
     events = (uint32_t) event;
 
     if (event == NGX_READ_EVENT) {
@@ -404,6 +407,13 @@ ngx_epoll_add_event(ngx_event_t *ev, ngx_int_t event, ngx_uint_t flags)
 #endif
     }
 
+    // 注意：EPOLL_CTL_MOD是根据传入的结构体设置覆盖原来的设置！所以要先提取已有的注册事件！
+    // case study：
+    // 若期望添加的event是NGX_READ_EVENT，
+    // 则看对应连接的写事件是否active（即fd是否已在epoll中注册EPOLLOUT，反之看对应连接的读事件是否active），
+    // 因为1个fd对应1个EPOLLIN和EPOLLOUT事件，两个事件在epoll看来就是标志位的区别，
+    // 所以若希望添加读事件时，写事件为active，则采用EPOLL_CTL_MOD往epoll中添加事件时不能丢掉写事件，
+    // 此时events = NGX_READ_EVENT|EPOLLOUT|EPOLLET。
     if (e->active) {
         op = EPOLL_CTL_MOD;
         events |= prev;
@@ -648,6 +658,7 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
         }
 #endif
 
+        // 注意运算优先级，&& 优先级最低
         if ((revents & (EPOLLERR|EPOLLHUP))
              && (revents & (EPOLLIN|EPOLLOUT)) == 0)
         {
@@ -660,6 +671,8 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
             revents |= EPOLLIN|EPOLLOUT;
         }
 
+        // 有无可能(revents & EPOLLIN)!=0，但rev->active==0？
+        // 还是说，这是为了统一上述 无EPOLLIN和EPOLLOUT的错误事件 的处理逻辑？
         if ((revents & EPOLLIN) && rev->active) {
 
             if ((flags & NGX_POST_THREAD_EVENTS) && !rev->accept) {

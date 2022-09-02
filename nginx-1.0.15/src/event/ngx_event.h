@@ -35,9 +35,14 @@ typedef struct {
 } ngx_event_mutex_t;
 
 
+// 事件结构体
 struct ngx_event_s {
+    // 通常指向连接结构体ngx_connection_t
     void            *data;
 
+    // 事件是否为 写事件，
+    // 在函数ngx_connection_t *ngx_get_connection(ngx_socket_t s, ngx_log_t* log)中，
+    // 连接对象的写事件的标志位write被设为1
     unsigned         write:1;
 
     unsigned         accept:1;
@@ -49,11 +54,17 @@ struct ngx_event_s {
      * the event was passed or would be passed to a kernel;
      * in aio mode - operation was posted.
      */
+    // 事件是否注册到了内核epoll/select/poll中，
+    // 如epoll机制中，事件被epoll_ctl(2)加入epoll后，事件该标志位被设为1，
+    //                事件被epoll_ctl(2)移出epoll后，事件该标志位被设为0。
     unsigned         active:1;
 
     unsigned         disabled:1;
 
     /* the ready event; in aio mode 0 means that no operation can be posted */
+    // 事件对应的fd上有无可能读写，ready==0则一定无法读写，ready==1则可以尝试读写
+    // 如epoll机制中，读事件的标志位ready会在epoll_wait(2)返回后、事件回调函数被调用前被设为1，
+    //                在c->read/c->readv_chain中被重置为0
     unsigned         ready:1;
 
     unsigned         oneshot:1;
@@ -107,7 +118,7 @@ struct ngx_event_s {
      * otherwise:
      *   accept:     1 if accept many, 0 otherwise
      */
-
+    // epoll机制中，用于一次尽可能多地建立连接
 #if (NGX_HAVE_KQUEUE) || (NGX_HAVE_IOCP)
     int              available;
 #else
@@ -227,7 +238,9 @@ typedef struct {
 } ngx_event_debug_t;
 
 
+// 事件驱动模块须要实现的功能
 typedef struct {
+    // 将1个感兴趣事件添加/移出事件驱动机制
     ngx_int_t  (*add)(ngx_event_t *ev, ngx_int_t event, ngx_uint_t flags);
     ngx_int_t  (*del)(ngx_event_t *ev, ngx_int_t event, ngx_uint_t flags);
 
@@ -238,6 +251,11 @@ typedef struct {
     ngx_int_t  (*del_conn)(ngx_connection_t *c, ngx_uint_t flags);
 
     ngx_int_t  (*process_changes)(ngx_cycle_t *cycle, ngx_uint_t nowait);
+    // 事件驱动模块的工作循环，该函数是分发处理一批事件的核心函数，
+    // 如epoll机制中，该函数是ngx_epoll_process_events，
+    // 该函数负责处理一批epoll_wait(2)返回的事件，如回调事件处理函数、分发到posted队列
+    // （处理posted队列是交给更上一层函数void ngx_process_events_and_timers(ngx_cycle_t* cycle)处理的，
+    // 该上层函数在worker进程的工作循环函数ngx_worker_process_cycle中每次循环都被调用一次）
     ngx_int_t  (*process_events)(ngx_cycle_t *cycle, ngx_msec_t timer,
                    ngx_uint_t flags);
 
@@ -445,10 +463,16 @@ extern ngx_event_actions_t   ngx_event_actions;
 #endif
 
 
+// Nginx提供的调用事件驱动模块各种功能函数的宏，可简化编写代码
 #define ngx_process_changes  ngx_event_actions.process_changes
 #define ngx_process_events   ngx_event_actions.process_events
 #define ngx_done_events      ngx_event_actions.done
 
+// Nginx提供的调用事件驱动模块各种功能函数的宏，
+// 同时，Nginx往事件驱动机制增删事件或连接一般使用更上一层的接口函数，
+// 处理读事件：ngx_int_t ngx_handle_read_event(ngx_event_t* rev, ngx_uint_t flags)，
+// 处理写事件：ngx_int_t ngx_handle_write_event(ngx_event_t* wev, size_t lowat)，
+// 这两个接口函数就会调用下面的宏完成事件驱动的特定功能
 #define ngx_add_event        ngx_event_actions.add
 #define ngx_del_event        ngx_event_actions.del
 #define ngx_add_conn         ngx_event_actions.add_conn
@@ -488,12 +512,15 @@ typedef struct {
 } ngx_event_conf_t;
 
 
+// 事件模块的通用接口，类似HTTP模块的通用接口ngx_http_module_t，
+// 该结构体即Nginx模块的基础接口（结构体ngx_module_t）中的void *ctx指向的结构体
 typedef struct {
     ngx_str_t              *name;
 
     void                 *(*create_conf)(ngx_cycle_t *cycle);
     char                 *(*init_conf)(ngx_cycle_t *cycle, void *conf);
-
+    // 事件驱动模块须要实现各种接口，如添加删除事件、事件处理循环函数等，
+    // 但Nginx一般不通过actions.add等来调用方法，而是通过宏ngx_add_event
     ngx_event_actions_t     actions;
 } ngx_event_module_t;
 

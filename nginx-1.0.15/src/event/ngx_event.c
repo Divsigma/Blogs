@@ -196,6 +196,9 @@ ngx_module_t  ngx_event_core_module = {
 };
 
 
+// worker进程的事件处理函数，该函数被worker进程的工作循环函数循环地调用
+// 该函数借助事件驱动机制（如epoll）的事件处理函数ngx_process_events完成事件分发和处理，
+// 然后处理分发的事件（如posted队列事件）和定时器事件
 void
 ngx_process_events_and_timers(ngx_cycle_t *cycle)
 {
@@ -276,6 +279,9 @@ ngx_process_events_and_timers(ngx_cycle_t *cycle)
 }
 
 
+// 事件驱动模块对其他模块开放的处理 读事件 接口，
+// 该函数负责调用事件驱动模块的具体功能宏，完成各个机制的“处理”逻辑，
+// “处理”可能是将 读事件 【添加或移出】事件驱动机制（根据事件当前的标志位情况）
 ngx_int_t
 ngx_handle_read_event(ngx_event_t *rev, ngx_uint_t flags)
 {
@@ -344,6 +350,9 @@ ngx_handle_read_event(ngx_event_t *rev, ngx_uint_t flags)
 }
 
 
+// 事件驱动模块对其他模块开放的处理 写事件 接口，
+// 该函数负责调用事件驱动模块的具体功能宏，完成各个机制的“处理”逻辑，
+// “处理”可能是将 写事件 【添加或移出】事件驱动机制（根据事件当前的标志位情况）
 ngx_int_t
 ngx_handle_write_event(ngx_event_t *wev, size_t lowat)
 {
