@@ -358,7 +358,9 @@ make install
 
 
 
-- 20220830：
+- 20220903：
+
+  <img src="./img/callback_stack.png" alt="img" style="zoom:80%;" />
 
 
 
@@ -367,7 +369,6 @@ make install
 - 处理新连接的入口：监听-->ngx_event_accept-->ngx_http_init_connection。
   - “监听连接”到达新的读事件时，调用“监听连接”读回调函数ngx_event_accept，**ngx_event_accept中会从监听端口accept并建立新连接，紧接着调用ls->handler，由此新连接的处理进入了init_connection**。
   - 注意，ngx_http_init_connection是新连接的第一个处理函数，它设置新连接的第一个读回调函数为ngx_http_init_request（由ngx_http_init_connection设置）
-
 - 在哪里设置了ngx_event_accept？
 
   - 总之：**在ngx_event_core_module的init_process方法中被设置，而worker进程进入循环处理函数前会调用各个模块的init_process**
@@ -378,160 +379,20 @@ make install
 
   - 设立读回调：event/ngx_event.c:ngx_int_t ngx_event_process_init(ngx_cycle_t *cycle)，该方法是ngx_event_core_module核心模块的init_process方法，会在Nginx启动时被调用！（书P267）：
 
-    ```c
-    cycle->connections = ngx_alloc(sizeof(ngx_connection_t) * cycle->connection_n, cycle->log);
-    ngx_connection_t *c = cycle->connections;
-    cycle->read_events = ngx_alloc(sizeof(ngx_event_t) * cycle->connection_n, cycle->log);
-    ngx_event_t *rev = cycle->read_events; // 接着closed和instance位的初始化
-    cycle->write_events = ngx_alloc(sizeof(ngx_event_t) * cycle->connection_n, cycle->log);
-    ngx_event_t *wev = cycle->write_events; // 接着closed和instance位的初始化
-    // 将连接池、读事件池和写事件池对应
-    ngx_listening_t *ls = cycle->listening.elts;
-    for (int i = 0; i < cycle->listening.nelts; i++) {
-        c = ngx_get_connection(ls[i].fd, cycle->log);
-        
-        c->listening = &ls[i];
-        ls[i].connection = c;
-        
-        c->read->log = c->log;
-        c->read->accept = 1;
-        c->read->deferred_accept = ls[i].deferred_accept;
-        
-        c->read->handler = ngx_event_accept;
-        /* delete the old accept events that were bound to the old cycle read events array */
-        // 注意，若使用负载均衡，则worker进程以“一次事件处理循环”为单位争用accept_mutex锁，再决定是否往epoll添加监听
-        // 具体地，每次循环中，worker进程都非阻塞地争用锁，
-        // (a) 若拿到accept_mutex，则保持持有并返回，或调用函数往epoll添加监听对象的读事件，
-        //     ngx_enable_accept_events(ngx_cycle_t*)会执行与下面5行相同的代码！
-        // (b) 若拿不到accept_mutex，则调用函数将从epoll移除监听对象的读事件，
-        //     ngx_disable_accept_events(ngx_cycle_t*)会调用ngx_del_event移除非active的“监听连接”读事件
-        //     （由此可见，active位应该就是标记事件是否已经添加入epoll？）
-        if (ngx_use_accept_mutex) continue;
-        if (ngx_event_flags & NGX_USE_RTSIG_EVENT) {
-            if (ngx_add_conn(c) == NGX_ERROR) return NGX_ERROR;
-        } else {
-            if (ngx_add_event(rev, NGX_READ_EVENT, 0) == NGX_ERROR) return NGX_ERROR;
-        }
-    }
-    return NGX_OK;
-    ```
-
 - 在哪里进入了ngx_event_accept？
 
   - 监听对象作为一种特殊连接，监听端口有新的建立连接请求到达时，其“监听连接”触发读回调，进入ngx_event_accept。
-
 - ngx_event_accept如何accept并建立新连接？如何让新连接进入到init_connection和后续处理？
 
   - accept并建立新连接后，**紧接着对新连接调用ls->handler(c)**，即init_connection(c)。
 
-    ```c
-    // event/ngx_event_accept.c:ngx_event_accept(ngx_event_t *ev)
-    
-    ngx_connection_t *lc = ev->data;  // listening connection_t ?
-    ngx_listening_t *ls = lc->listening;
-    ev->ready = 0;
-    do {
-        socklen = NGX_SOCKADDRLEN;
-        ngx_socket_t s = accept(lc->fd, (struct sockaddr *) sa, &socklen);
-        if (s == -1) {
-            err = ngx_socket_errno;
-            if (err == NGX_EAGAIN) {
-                ngx_log_debug0(NGX_LOG_DEBUG_EVENT, ev->log, err, "accept() not ready");
-                return;
-            }
-            ngx_log_error(..., ev->log, err, "accept() failed");
-            ...
-            return;
-        }
-        // 这里创建新连接并做一些初始化！
-        // 会分配内存、设置c->fd、保存ngx_cycle->files[c->fd] = c，还会设置c->write->write=1。
-        // 详见core/ngx_connection.c:ngx_get_connection
-        c = ngx_get_connection(s, ev->log);
-        c->pool = ngx_create_pool(ls->pool_size, ev->log);
-        c->sockaddr = ngx_palloc(c->pool, socklen);  ngx_memcpy(c->sockaddr, sa, socklen);
-        log = ngx_palloc(c->pool, sizeof(ngx_log_t));
-        /* set a blocking mode for aio and non-blocking mode for others*/
-        // ... ngx_nonblocking(s) ...
-        *log = ls->log;
-        c->log = log;
-        c->recv = ngx_recv;  // 设置为系统调用？
-        c->send = ngx_send;
-        c->listening = ls;
-        // 更多初始化
-        rev = c->read;
-        wev = c->write;
-        wev->ready = 1;
-        if (ngx_event_flags & (NGX_USE_AIO_EVENT|NGX_USE_RTSIG_EVENT)) rev->ready = 1;
-        if (ev->deferred_accept) rev->ready = 1;
-        rev->log = log;
-        wev->log = log;
-        // 更多调试和锁的初始化...
-        ngx_log_debug3(NGX_LOG_DEBUG_EVENT, log, 0, "*%d accept: %V fd:%d", c->number, &c->addr_text, s);
-        // ngx_add_conn在event/ngx_event.h的宏中定位为 #define ngx_add_conn ngx_event_actions.add_conn
-        // epoll模块使用的就是event/modules/ngx_epoll_module.c:ngx_epoll_add_connection(ngx_connection_t *c)
-        // 该函数会像ngx_add_event()一样操作rev->active和wev->active
-        // 注意==优先级高于&&优先级！
-        // Q：但为什么使用epoll就不调用ngx_add_conn。。。。？（不添加也不合实际啊。。）而书上P326说会添加。。？
-        if (ngx_add_conn && (ngx_event_flags & NGX_USE_EPOLL_EVENT) == 0) {
-            if (ngx_add_conn(c) == NGX_ERROR) { /* close accepted connection and return */ }
-        }
-        ls->handler(c);
-        if (ngx_event_flags & NGX_USE_KQUEUE_EVENT) {
-            ev->available--;
-        }
-    } while (ev->available);
-    ```
-
-  - ngx_get_connection(ngx_socket_t s, ngx_log_t *log)（core/ngx_connection.c中）：注意内存泄漏
-
-    ```c
-    c = ngx_cycle->free_connections;
-    ngx_cycle->free_connections = c->data;
-    ngx_cycle->free_connections_n--;
-    ...
-    ngx_event_t *rev = c->read;
-    ngx_event_t *wev = c->write;
-    ngx_memzero(c, sizeof(ngx_connection_t));
-    c->read = rev;
-    c->write = wev;
-    ngx_memzero(rev, sizeof(ngx_event_t));
-    ngx_memzero(wev, sizeof(ngx_event_t));
-    ...
-    rev->data = c; wev->data = c;
-    wev->write = 1;
-    ```
-
-  - ngx_epoll_add_connection(ngx_connection_t *c)：
-
-    ```c
-    static ngx_init_t
-    ngx_epoll_add_connection(ngx_connection_t *c)
-    {
-        struct epoll_event ee;
-        ee.events = EPOLLIN|EPOLLOUT|EPOLLET;
-        ee.data.ptr = (void *) ((uintptr_t) c | c->read->instance);
-        ngx_log_debug2(...);
-        if (epoll_ctl(ep, EPOLL_CTL_ADD, c->fd, &ee) == -1) ...
-        c->read->active = 1;
-        c->write->active = 1;
-        return NGX_OK;
-    }
-    ```
-
 - 在哪里设置了新连接的第一个回调函数是init_connection？
 
-  - **新连接的第一个读回调函数不是init_connection**，**init_connection是新连接的第一个处理函数**，它负责设置新连接的第一个回调函数init_request。
+  - 新连接的第一个读回调函数**不是init_connection**，init_connection是新连接的**第一个处理函数**，它负责设置新连接的**第一个回调函数init_request**。
   - ngx_http.c:ngx_http_add_listening中（该函数被ngx_http.c:ngx_http_init_listening调用），用ngx_create_listening创建了监听对象ls，然后设置ls->handler=ngx_http_init_connection。（却没有设置监听对象的fd）。
-
 - 新连接在哪里进入了init_connection？（总之：init_connection是**新连接被accept后的第一个读回调函数**）
 
   - “监听连接”到达新的读事件时，回调了“监听连接”的ngx_event_accept，**ngx_event_accept中会对新连接直接调用ls->handler**，由此新连接进入了init_connection。
-
-
-
-
-
-
 
 
 #### （2） 处理请求的11个阶段（假设用epoll事件驱动模块）
@@ -553,30 +414,9 @@ make install
   - 6、连接读回调和写回调request_handler(**ngx_event_t *ev**)（？借助epoll多次回调自身？）：仅负责触发请求读回调和写回调。ev->write==0则调用ev->data->data->read_event_handler(r)（即请求的读回调），否则调用ev->data->data->write_event_handler(r)（即请求的写回调）
     - 请求读回调block_reading(**ngx_http_request *r**)：同前所述
     - 请求写回调core_run_phases(**ngx_http_request *r**)：根据请求所处阶段和状态（如phase_handler索引），调用各HTTP模块的所属阶段的checker函数，由各checker函数调用HTTP模块的自定义handler。
-      - HTTP模块的自定义handler：可以使用3.6.3.2和3.6.3.3的异步接口，如ngx_http_static_module的handler。<span style="color:red">（在请求还是连接上产生新的读写回调函数？）</span>然后根据返回值决定handler中具体的处理行为（Hello World中不用等到包体接收完毕，比较简单。<span style="color:red">如果HTTP模块需要调用异步接口接受包体后处理或发送请求后再处理，岂不是要阻塞等待接受/发送完毕？还是说，这不同于不同编程，需要采用异步编程模式？</span>）。这些异步接口把请求处理划分成了独立的事件。
-- 
-- 
-
-- 每个连接对象有一个读事件对象和一个写事件对象，ngx_event_accept在建立成功新连接后，会调用ngx_listening_t中的handler回调方法，这个回调方法就是ngx_http_init_connection(ngx_connection_t *c)。该方法将新建立连接的可读事件处理方法设置为ngx_http_init_request，在第一次TCP有数据可读时会用这个方法处理
-- 随后，ngx_http_init_request中将读事件回调函数设为ngx_http_process_request_line（可能会多次回调，对应的读事件会被多次添加到epoll。书P396。<span style="color:red">为什么要多次调用ngx_handle_read_event往epoll添加同一个ngx_event_t事件？</span>）ngx_http_process_request_line中最后将读事件的回调函数设为ngx_http_process_request_headers（书P399，触发这次回调的读事件同样会被多次添加）、ngx_http_process_request_headers中最后将读事件回调函数设为ngx_http_process_request
-- 上述的process_request_line和process_request_headers中，可能会多次将触发该回调的事件加入epoll
-- 而ngx_http_process_request正式开始处理请求，这个函数也是自定义模块参与的部分。
-- ngx_http_process_request方法有4个关键工作：
-  - （1）将请求对应连接上的读写事件回调函数都设置成ngx_http_request_handler
-  - （2）根据请求结构体的internal表示位设定结构体的phase_handler索引，决定各HTTP模块指定的handler执行的入口。
-  - （3）设定请求结构体的read_event_handler为ngx_http_block_reading方法（即不处理任何读事件。但万一有数据来，岂不是阻塞了？？）、write_event_handler为ngx_http_core_run_phases。
-  - （4）最后以一次调用ngx_http_core_run_phases结束（用来第一次触发异步处理请求的write_event_handler回调方法？）
-- ngx_http_core_run_phases中，会调用请求结构体中phase_handler索引对应阶段的checker方法，checker方法真正地调用各HTTP模块的handler业务处理回调函数。
-- 而不同的checker都会做3个主要工作：
-  - （1）调用HTTP模块对应的handler方法处理请求
-  - （2）根据HTTP模块对应的handler方法的返回值，决定下一个要调用的回调方法，改写请求结构体的phase_handler（<span style="color:red">为什么基本都是phase_handler++？</span>）
-  - （3）根据HTTP模块对应的handler方法的返回值，决定决定是否调用ngx_http_finalize_request
-  - （4）根据HTTP模块对应的handler方法的返回值，设定自己的返回值，来控制ngx_http_core_run_phases的行为。返回非NGX_OK会让其继续调用checker来处理phase_handler对应的回调函数，返回NGX_OK会让其转接控制权给epoll（**代码中是ngx_http_core_run_phases直接return**）
-- 第一次调用的ngx_http_core_run_phases控制权转交给epoll后，请求对应的连接上的读写事件再次触发时，调用了ngx_http_process_request工作（1）中设置的ngx_http_request_handler回调方法
-- ngx_http_request_handler方法会针对触发的是读事件还是写事件（为什么是通过请求结构体的write位判断？这个write又是在哪里设置的？事件的write代表事件类型，在ngx_get_connection设置），分别回调**连接对应的请求**的read_event_handler和write_event_handler，（即连接结构体的data字段，<span style="color:red">为什么一个连接只能有一个请求？这岂不是串行处理请求对象？不能像一个服务端口并发百万TCP连接。还是说下面的异步接收包体和发送响应实现了“并发处理”多个请求？</span>），而**一般请求的写事件回调函数是ngx_http_core_run_phases，这就回到了各HTTP模块对应阶段的checker函数调用**
-- HTTP框架处理请求有11个阶段，倒数第二个阶段NGX_HTTP_CONTENT_PHASE的checker方法需要注意：
-  - NGX_HTTP_LOG_PHASE的回调方法在ngx_http_free_request中才会被调用，所以NGX_HTTP_CONTENT_PHASE阶段基本就是业务处理的最后一个阶段
-  - <span style="color:red">如果两种介入CONTENT_PHASE的方式是等价的，为什么调用请求的content_handler前要把请求的写事件回调函数设为空，调用模块的handler前就不用？书说“可以防止该HTTP模块异步地处理请求时却有其他HTTP模块还在同时处理可写事件、向客户端发送响应”？</span>（书P413）
+      - HTTP模块的自定义handler：可以使用3.6.3.2和3.6.3.3的异步接口，如ngx_http_static_module的handler。<span style="color:red">（异步接口在请求还是连接上产生新的读写回调函数？）</span>然后根据返回值决定handler中具体的处理行为（Hello World中不用等到包体接收完毕，比较简单。<span style="color:red">如果HTTP模块需要调用异步接口接受包体后处理或发送请求后再处理，岂不是要阻塞等待接受/发送完毕？还是说，这不同于不同编程，需要采用异步编程模式？</span>）。这些异步接口把请求处理划分成了独立的事件。
+- <span style="color:red">问题22</span>：HTTP请求即连接结构体的data字段，为什么一个连接只能有一个请求？这岂不是串行处理请求对象？不能像一个服务端口并发百万TCP连接。还是说下面的异步接收包体和发送响应实现了“并发处理”多个请求？
+- <span style="color:red">问题23</span>：如果两种介入CONTENT_PHASE的方式是等价的，为什么调用请求的content_handler前要把请求的写事件回调函数设为空，调用模块的handler前就不用？书说“可以防止该HTTP模块异步地处理请求时却有其他HTTP模块还在同时处理可写事件、向客户端发送响应”？（书P413）
 
 
 
@@ -590,7 +430,7 @@ make install
 
 
 
-#### （3） HTTP框架为模块开发提供接口：异步接收包体
+#### （3） HTTP框架为模块开发提供接口：异步接收包体（3Q）
 
 - overview：
   - <span style="color:red">是否会修改请求的读回调函数？如果修改了，是否需要将读回调设置回block_reading？在哪里设置的？</span>
@@ -616,92 +456,33 @@ make install
 
 
 
-#### （4） HTTP框架为模块开发提供的接口：异步发送响应
+#### （4） HTTP框架为模块开发提供的接口：异步发送响应（6Q）
 
 - overview：
-
-- P193：HTTP过滤模块的另一个特性是，在普通HTTP模块处理请求完毕，并调用ngx_http_send_header发送HTTP头部，或者调用ngx_http_output_filter发送HTTP包体时（<span style="color:red">不调用会怎么样？默认在哪个模块调用？多个模块都调用了会怎样？</span>），才会由这两个方法一次调用所有的HTTP过滤模块来处理这个请求。
-
-- 综合书P433和书P435：ngx_http_send_header方法最终会调用ngx_http_write_filter方法来发送响应头部，而ngx_http_output_filter方法最终也是调用**ngx_http_write_filter**方法来发送响应包体的。ngx_http_write_filter是最后一个HTTP过滤模块的方法（最后一个过滤模块需要负责发送请求），它会尝试一次发送请求结构体中的out成员，如果无法一次性发送，则返回NGX_AGAIN。ngx_http_output_filter也会返回NGX_AGAIN，表示out中还有未发送的数据。所以不论是ngx_http_send_header还是ngx_http_output_filter，在无法一次性发送out数据时，都返回NGX_AGAIN给ngx_http_finalize_request，根据传入的是NGX_AGAIN，**ngx_http_finalize_request设置请求的写事件回调函数为ngx_http_writer**并往epoll添加第一次ngx_http_writer的回调，而ngx_http_writer会尝试调用一次**ngx_http_output_filter**来发送out数据，**然后通过往epoll设置自身的多次回调来完成out数据的发送**。
-
-  - <span style="color:red">Q1--如果HTTP模块中调用了send_header或output_filter，无法一次性发送/能一次性发送时，请求写回调是不是core_run_phases？</span>
-
-  - <span style="color:red">Q2--如果HTTP模块调用了send_header方法、该方法改了请求写回调，那岂不是无法继续调用HTTP处理11个阶段中其他模块的checker了？</span>）
-
-  - ngx_int_t ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)：
-
-    ``` c
-    /* find the size, the flush point and the last link of the saved chain */
-    for (cl = r->out; cl; cl = cl->next) {
-        ll = &cl->next;
-        ...
-    }
-    /* add the new chain to the existent one */
-    // 注意此处是尾插入
-    for (ln = in; ln; ln = ln->next) {
-        cl = ngx_alloc_chain_link(r->pool);
-        if (cl == NULL) {
-            return NGX_ERROR;
-        }
-        // 直接指向ln->buf，所以传入的in参数所指内存需要在内存池分配？
-        cl->buf = ln->buf;
-        *ll = cl;
-        ll = &cl->next;
-        ...
-    }
-    /*
-     * avoid the output if there are no last buf, no flush point,
-     * there are the incoming bufs and the size of all bufs
-     * is smaller than "postpone_output" directive
-     */
-    if (!last && !flush && in && size < (off_t) clcf->postpone_output) {
-        return NGX_OK;
-    }
-    if (c->write->delayed) {
-        c->buffered |= NGX_HTTP_WRITE_BUFFERED;
-        return NGX_AGAIN;
-    }
-    ...
-    if (r->limit_rate) {
-        limit = r->limit_rate * (ngx_time() - r->start_sec + 1)
-                - (c->sent - clcf->limit_rate_after);
-        if (limit <= 0) {
-            // 此时c->write->handler应该为ngx_http_request（即连接的写回调，请求的写回调未知）？？
-            c->write->delayed = 1;
-            ngx_add_timer(c->write, (ngx_msec_t) (- limit * 1000 / r->limit_rate + 1));
-            c->buffered |= NGX_HTTP_WRITE_BUFFERED;
-            return NGX_AGAIN;
-        }
-        ...
-    }
-    ...
-    // 真正执行一次发送，不阻塞（为什么不检查写事件是否ready？ngx_io.send_chain中检查了！见os/unix/ngx_writev_chain.h）
-    sent = c->sent;
-    chain = c->send_chain(c, r->out, limit);
-    if (r->limit_rate) { if (clcf->limit_rate_after) { sent -= ...; ...; } ... }
-    ...
-    // 给r->pool返还内存
-    for (cl = r->out; cl && cl != chain; /* void */) {
-        ln = cl;
-        cl = cl->next;
-        ngx_free_chain(r->pool, ln);
-    }
-    r->out = chain;
-    if (chain) {
-        c->buffered |= NGX_HTTP_WRITE_BUFFERED;
-        return NGX_AGAIN;
-    }
-    ...
-    return NGX_OK;
-    ```
+  - <span style="color:red">如果一个HTTP请求处理过程中，如何保证一定有一个模块调用了异步发送接口？</span>
+  - <span style="color:red">如果一个HTTP请求处理过程中，有多个模块调用了异步发送请求头的接口会怎么样？</span>
+  - <span style="color:red">如果某个HTTP模块调用了send_header或output_filter方法、该方法改了请求写回调，那岂不是无法继续调用HTTP处理11个阶段中其他模块的checker了？</span>
+  - <span style="color:red">如果HTTP模块中调用了send_header或output_filter，无法一次性发送或能一次性发送时，请求写回调是不是core_run_phases？</span>
+    - send_header和output_filter最后都会调用到ngx_http_write_filter，ngx_http_write_filter先将传入的发送内容插入到发送链表尾部，再尝试一次c->send_chain，然后直接返回结果，上层函数（一定是ngx_http_finalize_request？）根据返回值再设置异步发送回调函数或接收请求。
+    - 所以调用这两个接口后，具体的请求写回调状态要看接收send_header和output_filter返回值的上层函数的处理结果
 
   - <span style="color:red">既然发送响应只用到了c->send_chain，那为什么接收的时候不用c->recv_chain？</span>
-
   - <span style="color:red">ngx_http_write_filter从r->pool获取内存了、还会往epoll和定时器多次添加事件，但为什么不增加r->count？</span>
+
+- P193：HTTP过滤模块的另一个特性是，在普通HTTP模块处理请求完毕，并调用ngx_http_send_header发送HTTP头部，或者调用ngx_http_output_filter发送HTTP包体时，才会由这两个方法一次调用所有的HTTP过滤模块来处理这个请求。
+- 综合书P433和书P435：ngx_http_send_header方法最终会调用ngx_http_write_filter方法来发送响应头部，而ngx_http_output_filter方法最终也是调用**ngx_http_write_filter**方法来发送响应包体的。ngx_http_write_filter是最后一个HTTP过滤模块的方法（最后一个过滤模块需要负责发送请求），它会尝试一次发送请求结构体中的out成员，如果无法一次性发送，则返回NGX_AGAIN。ngx_http_output_filter也会返回NGX_AGAIN，表示out中还有未发送的数据。所以不论是ngx_http_send_header还是ngx_http_output_filter，在无法一次性发送out数据时，都返回NGX_AGAIN给ngx_http_finalize_request，根据传入的是NGX_AGAIN，**ngx_http_finalize_request设置请求的写事件回调函数为ngx_http_writer**并往epoll添加第一次ngx_http_writer的回调，而ngx_http_writer会尝试调用一次**ngx_http_output_filter**来发送out数据，**然后通过往epoll设置自身的多次回调来完成out数据的发送**。
 
   - ngx_http_set_write_handler-->ngx_http_writer-->rc = ngx_http_output_filter(r, NULL)-->ngx_http_top_body_filter（又要走一遍body的HTTP过滤模块）-->...-->ngx_http_writer_filter。
 
-- 每个模块的返回值会被传入ngx_http_finalize_request，由ngx_http_finalize_request通过传入的返回值决定行为——异步or结束请求。若结束尝试请求，则会调用ngx_http_finalize_connection；
+
+
+
+
+
+
+#### （5）结束请求和结束连接
+
+- NGX_HTTP_CONTENT_PHASE阶段的每个模块的返回值会被传入ngx_http_finalize_request，由ngx_http_finalize_request通过传入的返回值决定行为——异步or结束请求。若结束尝试请求，则会调用ngx_http_finalize_connection；
 
 - ngx_http_finalize_connection事实上不止操作connection，还会调用ngx_http_close_request来管理request的引用计数并真正地调用ngx_http_free_request来释放请求资源。ngx_http_close_request还会调用ngx_http_close_connection，而ngx_http_close_connection才会调用ngx_http_free_connection来释放资源。
 
@@ -709,9 +490,9 @@ make install
 
   finalize_request会尝试finalize_connection，finalize_connection才真正地尝试用close释放request（进而释放connection资源）。但close不一定会释放资源（因为引用计数&keepalive特性），free才会释放资源。
 
-- P435：无论是ngx_http_send_header还是ngx_http_output_filter方法，它们在调用时一般都无法发送全部的响应，剩下的响应内容都得靠ngx_http_writer方法来发送。（通过ngx_http_send_header和ngx_http_output_filter响应请求，但实际上它们都会在无法一次性发送时调用ngx_http_writer异步完成剩余的发送。）
 
 
 
-### 3.6.3 如果多个HTTP模块的handler中都对处理的请求发送了HTTP响应，框架如何保证发送HTTP的顺序是正确的？
+
+### 3.6.3 如果多个HTTP模块的handler中都对处理的请求发送了HTTP响应，框架如何保证发送HTTP响应的顺序是正确的？
 
