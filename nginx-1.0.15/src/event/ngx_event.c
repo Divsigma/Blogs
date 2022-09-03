@@ -180,6 +180,7 @@ ngx_event_module_t  ngx_event_core_module_ctx = {
 };
 
 
+// 核心模块，其init process的方法会在worker进程工作循环开始前被调用
 ngx_module_t  ngx_event_core_module = {
     NGX_MODULE_V1,
     &ngx_event_core_module_ctx,            /* module context */
@@ -581,6 +582,7 @@ ngx_timer_signal_handler(int signo)
 #endif
 
 
+// 核心模块ngx_event_core_module的初始化函数
 static ngx_int_t
 ngx_event_process_init(ngx_cycle_t *cycle)
 {
@@ -824,12 +826,20 @@ ngx_event_process_init(ngx_cycle_t *cycle)
 
 #else
 
+        // 设置监听对象中，读事件回调，
+        // 即用于创建（accept(2)）新连接的函数
         rev->handler = ngx_event_accept;
 
+        // 注意：若使用了负载均衡，此时不会把监听对象的读写事件加入事件驱动（如epoll）
+        //       而worker进程会以“一次事件处理”（ngx_process_event_and_timer）为单位争用accept_mutex锁，
+        //       再决定是否往epoll添加监听事件
+        //       具体地，参见上面ngx_process_event_and_timer中ngx_trylock_accept_mutex函数
         if (ngx_use_accept_mutex) {
             continue;
         }
 
+        // 若没有使用负载均衡，则在当前核心模块初始化时，
+        // 监听对象的读写事件就被加入事件驱动
         if (ngx_event_flags & NGX_USE_RTSIG_EVENT) {
             if (ngx_add_conn(c) == NGX_ERROR) {
                 return NGX_ERROR;

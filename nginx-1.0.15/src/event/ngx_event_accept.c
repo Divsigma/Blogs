@@ -15,6 +15,8 @@ static ngx_int_t ngx_disable_accept_events(ngx_cycle_t *cycle);
 static void ngx_close_accepted_connection(ngx_connection_t *c);
 
 
+// 监听对象读事件的回调函数，用于从监听socket创建新连接，
+// 并对新连接调用入口函数（如ngx_http_init_connection）
 void
 ngx_event_accept(ngx_event_t *ev)
 {
@@ -42,6 +44,9 @@ ngx_event_accept(ngx_event_t *ev)
 
     lc = ev->data;
     ls = lc->listening;
+    // epoll中，Nginx默认ET，此时该端口因负载均衡或连接池不足，
+    // 无法一次性accept(2)完怎么办？
+    // （全连接队列有连接未accept，此时添加监听端口的EPOLLET|EPOLLIN事件，会触发吗？）
     ev->ready = 0;
 
     ngx_log_debug2(NGX_LOG_DEBUG_EVENT, ev->log, 0,
@@ -104,9 +109,14 @@ ngx_event_accept(ngx_event_t *ev)
         (void) ngx_atomic_fetch_add(ngx_stat_accepted, 1);
 #endif
 
+        // 用于负载均衡。
+        // 表示一个进程还被允许接收多少个新连接，
+        //一个进程已建立的连接数不能超过可容纳总连接数的7/8
         ngx_accept_disabled = ngx_cycle->connection_n / 8
                               - ngx_cycle->free_connection_n;
 
+        // 获取新连接（未根据业务初始化，业务初始化在入口函数如ngx_http_init_connection中进行），
+        // 主要是获取一些系统资源，如fd、各种对象的内存、日志空间等
         c = ngx_get_connection(s, ev->log);
 
         if (c == NULL) {
@@ -281,6 +291,7 @@ ngx_event_accept(ngx_event_t *ev)
         log->data = NULL;
         log->handler = NULL;
 
+        // 对新连接调用入口函数，如ngx_http_init_connection
         ls->handler(c);
 
         if (ngx_event_flags & NGX_USE_KQUEUE_EVENT) {

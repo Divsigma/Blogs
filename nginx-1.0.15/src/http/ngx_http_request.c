@@ -179,6 +179,11 @@ ngx_http_header_t  ngx_http_headers_in[] = {
 };
 
 
+// 新HTTP连接的入口函数，
+// 新连接从监听对象的读回调函数ngx_event_accept中进入入口，
+// 进入该函数前，TCP连接已建立完毕，
+// 所以init connection可以理解为“初始化HTTP连接”，
+// 以完成一些业务/HTTP协议相关的初始化工作
 void
 ngx_http_init_connection(ngx_connection_t *c)
 {
@@ -234,6 +239,8 @@ ngx_http_init_connection(ngx_connection_t *c)
 }
 
 
+// 新HTTP连接的第一个读回调函数，
+// 初始化一个请求，并开始处理请求行
 static void
 ngx_http_init_request(ngx_event_t *rev)
 {
@@ -702,6 +709,8 @@ ngx_http_ssl_servername(ngx_ssl_conn_t *ssl_conn, int *ad, void *arg)
 #endif
 
 
+// 新HTTP连接的第二个读回调函数，可能被epoll多次回调，
+// 该函数循环地调用ngx_http_read_request_header来获取数据然后解析
 static void
 ngx_http_process_request_line(ngx_event_t *rev)
 {
@@ -951,6 +960,8 @@ ngx_http_process_request_line(ngx_event_t *rev)
 }
 
 
+// 新HTTP连接的第三个读回调函数，可能被epoll多次回调
+// 该函数循环地调用ngx_http_read_request_header来读取数据并解析头部
 static void
 ngx_http_process_request_headers(ngx_event_t *rev)
 {
@@ -1111,6 +1122,7 @@ ngx_http_process_request_headers(ngx_event_t *rev)
                 return;
             }
 
+            // 从这里，进入新HTTP连接的第四个读回调函数的过渡函数
             ngx_http_process_request(r);
 
             return;
@@ -1135,6 +1147,10 @@ ngx_http_process_request_headers(ngx_event_t *rev)
 }
 
 
+// 提供给新HTTP连接的第二个和第三个回调函数的功能函数，
+// （ngx_http_process_request_line和ngx_http_process_headers）
+// 用于调用连接读写字符流的接口读取数据，并保存到读缓冲
+// 注：非阻塞读写模式下，一定要维护读写缓冲！
 static ssize_t
 ngx_http_read_request_header(ngx_http_request_t *r)
 {
@@ -1523,6 +1539,8 @@ ngx_http_process_cookie(ngx_http_request_t *r, ngx_table_elt_t *h,
 }
 
 
+// 区别新HTTP连接的第三个读回调函数ngx_http_process_request_headers，
+// 该函数是在第三个回调函数中解析完所有头部字段后才被调用的，
 static ngx_int_t
 ngx_http_process_request_header(ngx_http_request_t *r)
 {
@@ -1591,6 +1609,11 @@ ngx_http_process_request_header(ngx_http_request_t *r)
 }
 
 
+// 新HTTP连接的第三个读回调函数 --> 新HTTP连接的第四个读回调函数 的
+// 过渡函数，用于设置接收完请求行+请求头后连接和请求的回调事件，
+// HTTP框架有两次解耦：建立TCP连接 --> 建立HTTP请求 --> 处理HTTP请求，
+// 第一次在监听对象的ls->handler(c)完成，
+// 第二次在这里完成，处理请求属于各HTTP模块的业务内容，将连接读写和请求读写分离，再次解耦
 static void
 ngx_http_process_request(ngx_http_request_t *r)
 {
@@ -1665,6 +1688,8 @@ ngx_http_process_request(ngx_http_request_t *r)
     c->write->handler = ngx_http_request_handler;
     r->read_event_handler = ngx_http_block_reading;
 
+    // 进入处理HTTP请求的阶段，
+    // 设置请求的 写 回调函数，并调用一次请求的写回调
     ngx_http_handler(r);
 
     ngx_http_run_posted_requests(c);
@@ -1795,6 +1820,9 @@ found:
 }
 
 
+// 新HTTP连接的第四个读回调函数、第一个写回调函数
+// 该函数仅用于根据连接上被回调事件类型，调用请求的读写函数，
+// 在此之前，已解耦 建立HTTP请求 --> 处理HTTP请求 的过程
 static void
 ngx_http_request_handler(ngx_event_t *ev)
 {
@@ -2212,6 +2240,9 @@ ngx_http_set_write_handler(ngx_http_request_t *r)
 }
 
 
+// 异步发送HTTP响应的回调函数，
+// 一般HTTP模块调用ngx_http_sender或ngx_http_output_filter后，若无法一次性发送数据，
+// 则会返回NGX_AGAIN给ngx_http_finalize_request，后者设置 请求的写回调 函数为下面的函数
 static void
 ngx_http_writer(ngx_http_request_t *r)
 {
@@ -2264,6 +2295,8 @@ ngx_http_writer(ngx_http_request_t *r)
         return;
     }
 
+    // 关键：利用ngx_http_output_filter发送剩余数据，
+    // 即HTTP响应被分块的所有数据，也都会经过HTTP过滤模块
     rc = ngx_http_output_filter(r, NULL);
 
     ngx_log_debug3(NGX_LOG_DEBUG_HTTP, c->log, 0,
@@ -2275,6 +2308,7 @@ ngx_http_writer(ngx_http_request_t *r)
         return;
     }
 
+    // 若发现还是无法发送完毕，则再次回调自身
     if (r->buffered || r->postponed || (r == r->main && c->buffered)) {
 
         if (!wev->delayed) {

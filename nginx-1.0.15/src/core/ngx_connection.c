@@ -701,6 +701,9 @@ ngx_close_listening_sockets(ngx_cycle_t *cycle)
 }
 
 
+// 从连接池获取新连接及与之对应的读写事件，记录连接和文件描述符映射，
+// 其他与资源相关的初始化，
+// 连接的业务初始化在连接的入口函数中进行（如ngx_http_init_connection）
 ngx_connection_t *
 ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
 {
@@ -742,10 +745,14 @@ ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
 
     /* ngx_mutex_unlock */
 
+    // 记录连接和文件描述符映射
     if (ngx_cycle->files) {
         ngx_cycle->files[s] = c;
     }
 
+    // 重置连接对象的内存前，须要记录其读写对象地址，
+    // 因与连接池对应的读写事件池已在核心模块ngx_event_core_module初始化时被分配
+    // （参见函数ngx_event_process_init）
     rev = c->read;
     wev = c->write;
 
@@ -770,6 +777,7 @@ ngx_get_connection(ngx_socket_t s, ngx_log_t *log)
     rev->data = c;
     wev->data = c;
 
+    // 只有写事件的write位被设为1
     wev->write = 1;
 
     return c;

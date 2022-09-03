@@ -802,6 +802,8 @@ ngx_module_t  ngx_http_core_module = {
 ngx_str_t  ngx_http_core_get_method = { 3, (u_char *) "GET " };
 
 
+// 处理新HTTP请求的入口函数，重定向后请求也从这里进入（重定向请求像一个新请求），
+// 此时已经完成 建立HTTP请求 的工作
 void
 ngx_http_handler(ngx_http_request_t *r)
 {
@@ -811,6 +813,7 @@ ngx_http_handler(ngx_http_request_t *r)
 
     r->connection->unexpected_eof = 0;
 
+    // 根据请求是否重定向，设置处理该请求的第一个HTTP模块
     if (!r->internal) {
         switch (r->headers_in.connection_type) {
         case 0:
@@ -842,6 +845,7 @@ ngx_http_handler(ngx_http_request_t *r)
 #endif
 
     r->write_event_handler = ngx_http_core_run_phases;
+    // 开始调用HTTP模块进行处理
     ngx_http_core_run_phases(r);
 }
 
@@ -1362,6 +1366,8 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
     ngx_int_t  rc;
     ngx_str_t  path;
 
+    // HTTP框架总会为每个请求都找到一个loc_conf？
+    // r->content_handler会被设置成对应loc_conf在解析配置时设定的处理函数
     if (r->content_handler) {
         r->write_event_handler = ngx_http_request_empty_handler;
         ngx_http_finalize_request(r, r->content_handler(r));

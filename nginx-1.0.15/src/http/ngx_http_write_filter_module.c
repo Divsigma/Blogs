@@ -44,12 +44,18 @@ ngx_module_t  ngx_http_write_filter_module = {
 };
 
 
+// 异步发送响应的入口函数，
+// 异步发送请求头（ngx_http_send_header）或请求包体（ngx_http_output_filter）
+// 最后到汇聚到此发送函数。
+// 该函数先将传入的发送内容插入到发送链表尾部，再尝试一次c->send_chain，然后直接返回结果，
+// 上层函数（一定是ngx_http_finalize_request？）根据返回值再设置异步发送回调函数或接收请求
 ngx_int_t
 ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
     off_t                      size, sent, nsent, limit;
     ngx_uint_t                 last, flush;
     ngx_msec_t                 delay;
+    // 体会ngx_chain_t **ll在尾插入中的作用！
     ngx_chain_t               *cl, *ln, **ll, *chain;
     ngx_connection_t          *c;
     ngx_http_core_loc_conf_t  *clcf;
@@ -63,6 +69,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     size = 0;
     flush = 0;
     last = 0;
+    // ngx_chain_t **ll用于尾插入！
     ll = &r->out;
 
     /* find the size, the flush point and the last link of the saved chain */
@@ -112,12 +119,14 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
     /* add the new chain to the existent one */
 
+    // 注意此处是尾插入，本质上“插入”仅涉及指针操作
     for (ln = in; ln; ln = ln->next) {
         cl = ngx_alloc_chain_link(r->pool);
         if (cl == NULL) {
             return NGX_ERROR;
         }
 
+        // 直接指向ln->buf，所以传入的in参数须要在内存池分配
         cl->buf = ln->buf;
         *ll = cl;
         ll = &cl->next;
@@ -239,6 +248,9 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http write filter limit %O", limit);
 
+    // 尝试一次发送，直到阻塞或发送完毕，
+    // 为什么不检查写事件的ready位来尽可能减少系统调用呢？send_chain本身内部有考虑，
+    // 参见函数ngx_writev_chain。
     chain = c->send_chain(c, r->out, limit);
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
@@ -283,6 +295,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         ngx_add_timer(c->write, 1);
     }
 
+    // 返还保存着已发送内容的内存（到指针chain为止）
     for (cl = r->out; cl && cl != chain; /* void */) {
         ln = cl;
         cl = cl->next;
